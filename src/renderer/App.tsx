@@ -14,6 +14,10 @@ import { useWindowDrag } from './hooks/useWindowDrag';
 import { usePanelResize } from './hooks/usePanelResize';
 import { heroFor } from './lib/heroCache';
 import { findSummon } from './engine/heroes.js';
+import { MAX_AGENTS, parseAgentInvocation } from './lib/agents';
+import type { AgentInvocation } from './lib/agents';
+import { bar } from './lib/bridge';
+import type { Workspace } from './types';
 import { levelFor, xpFor } from './lib/leveling';
 import { DEFAULT_ASK_MODEL, DEFAULT_PROJECT_MODEL } from './lib/models';
 import type { MapId, ModelAlias } from './types';
@@ -25,8 +29,11 @@ import type { MapId, ModelAlias } from './types';
  *   engine   ──► battle strip (canvas), driven by Claude + agent events
  *   hooks    ──► useClaudeRun (project chat), useAgents, useGeneralChat (Ask)
  */
+// "/plan" or "/plan <task>"
+const PLAN_COMMAND = /^\s*\/plan(?:\s+([\s\S]*))?$/i;
+
 function AppShell() {
-  const { settings, getSettings, patchWorkspace } = useSettings();
+  const { settings, getSettings, patchWorkspace, persistMessage, updateSettings } = useSettings();
   const ws = useActiveWorkspace();
   const { status, setStatus, bubble, say } = useStageStatus();
   const busyRef = useRef(false);
@@ -53,6 +60,11 @@ function AppShell() {
   const busy = run.running || agents.running;
   const projectBusy = run.running;
   busyRef.current = busy;
+  // Read after an await, where the values captured by the render may be stale.
+  const projectBusyRef = useRef(false);
+  projectBusyRef.current = projectBusy;
+  const selectedAgentRef = useRef<string | null>(null);
+  selectedAgentRef.current = agents.selectedId;
 
   // The hero is awake exactly while Claude or an agent is working, and sleeps once both are done.
   // (Driven by state: a ref-based check at event time is stale until the next render.)
@@ -107,21 +119,77 @@ function AppShell() {
   const map = ws?.map;
   useEffect(() => { if (map) game.configure({ mapId: map }); }, [map, game]);
 
-  const sendProjectPrompt = (text: string) => {
+  // "/<agent-name> <task>" runs that agent in its own tab and orb. Only names found under
+  // .claude/agents count; skills, other slash commands and plain text are not agents.
+  const startAgent = async (target: Workspace, { definition, task }: AgentInvocation, text: string) => {
+    persistMessage(target.id, { kind: 'user', text });
+    if (agents.agents.filter((a) => a.status === 'running').length >= MAX_AGENTS) {
+      persistMessage(target.id, { kind: 'meta', text: `${MAX_AGENTS} agents are already working. Wait for one to finish, or stop it.` });
+      return;
+    }
+    if (!task) {
+      persistMessage(target.id, { kind: 'meta', text: `Tell ${definition.name} what to do: /${definition.name} <task>` });
+      return;
+    }
+    say(`Summoning ${definition.name}…`, 2000);
+    try {
+      await agents.spawn(target, definition, task, settings.permissionMode);
+      persistMessage(target.id, { kind: 'meta', text: `${definition.name} is working in its own tab.` });
+    } catch (err) {
+      persistMessage(target.id, { kind: 'error', text: `Could not start ${definition.name}: ${(err as Error).message}` });
+    }
+  };
+
+  const sendProjectPrompt = async (typed: string) => {
     if (!ws) return;
+    let text = typed;
+    let permissionMode = settings.permissionMode;
     // "summon <character>" swaps the hero and is never sent to Claude.
     const summon = findSummon(text);
     if (summon) {
       workspaceActions.summonHero(ws, summon, text);
       return;
     }
+    if (text.trimStart().startsWith('/')) {
+      // "/<agent-name> <task>" starts an agent, even from inside another agent's tab.
+      let definitions: Awaited<ReturnType<typeof bar.agentDefinitions>> = [];
+      try {
+        definitions = await bar.agentDefinitions(ws.id);
+      } catch { /* treat it as an ordinary message rather than losing it */ }
+      const invocation = parseAgentInvocation(text, definitions);
+      if (invocation) {
+        await startAgent(ws, invocation, text);
+        return;
+      }
+      // "/plan [task]": plan mode is the "Plan only" permission mode here, not a headless command.
+      const plan = text.match(PLAN_COMMAND);
+      if (plan) {
+        const task = (plan[1] ?? '').trim();
+        if (task && !selectedAgentRef.current && projectBusyRef.current) {
+          // Check before changing the mode, so a refused task leaves the settings alone.
+          persistMessage(ws.id, { kind: 'user', text });
+          persistMessage(ws.id, { kind: 'meta', text: 'Claude is busy, so that /plan task was not sent. Try again when it finishes.' });
+          return;
+        }
+        if (settings.permissionMode !== 'plan') {
+          updateSettings({ permissionMode: 'plan' });
+          persistMessage(ws.id, { kind: 'meta', text: 'Plan mode is on and stays on (it is saved): Claude plans and changes nothing. Switch the permission dropdown to leave it.' });
+        }
+        permissionMode = 'plan';
+        if (!task) {
+          persistMessage(ws.id, { kind: 'user', text });
+          return;
+        }
+        text = task; // continues below as an ordinary message
+      }
+    }
     // With an agent's tab open, the message goes to that agent and the view stays on it.
-    const agent = agents.agents.find((a) => a.id === agents.selectedId);
+    const agent = agents.agents.find((a) => a.id === selectedAgentRef.current);
     if (agent) {
-      agents.message(ws, agent.id, text, settings.permissionMode);
+      agents.message(ws, agent.id, text, permissionMode);
       return;
     }
-    if (projectBusy) return;
+    if (projectBusyRef.current) return;
     agents.select(null);
     run.send(ws.id, text, projectModel);
   };
@@ -158,7 +226,6 @@ function AppShell() {
           hasWorkspace: !!ws,
           onImport: workspaceActions.importProject,
           agents: agents.agents,
-          agentBatch: agents.batch,
         }}
         hudProps={{ ws, game, status, dragProps }}
       />

@@ -18,6 +18,23 @@ export type ChatMessage =
   | { kind: 'tool'; name: string; summary?: string }
   | { kind: 'user' | 'assistant' | 'error' | 'meta' | 'thinking'; text: string };
 
+/** Something that can follow a "/" in the chat: an agent, a skill, a custom command, or a built-in Claude Code command. */
+export interface CommandEntry {
+  name: string;
+  kind: 'agent' | 'skill' | 'command' | 'builtin';
+  /** Where it comes from: "project", "user", "claude.ai sync", "built in"... */
+  source: string;
+  description: string;
+  argumentHint: string;
+}
+
+/** An agent a project can invoke with "/<name>": a markdown file under .claude/agents/. */
+export interface AgentDefinition {
+  name: string;
+  description: string;
+  source: 'project' | 'user';
+}
+
 export interface AgentRecord {
   id: string;
   name: string;
@@ -124,11 +141,17 @@ export interface Bar {
   sendGeneralChat(prompt: string, model: ModelAlias): void;
   cancelGeneralChat(): void;
 
-  spawnAgents(
-    wsId: string, count: number, prompt: string, cwd: string, permissionMode: PermissionMode,
-  ): Promise<AgentRecord[] | null>;
+  /** Everything the "/" popup offers for this project: agents, skills and custom commands. */
+  commandCatalog(wsId: string): Promise<CommandEntry[]>;
+  /** Agents defined under .claude/agents/ for this project (and the user's own). */
+  agentDefinitions(wsId: string): Promise<AgentDefinition[]>;
+  /** Runs one agent in its own process; `error` is set when it could not start. */
+  runAgent(
+    wsId: string, definitionName: string, displayName: string, task: string, permissionMode: PermissionMode,
+  ): Promise<{ agent?: AgentRecord; definitionName?: string; error?: string }>;
   messageAgent(
-    wsId: string, agentId: string, sessionId: string, prompt: string, cwd: string, permissionMode: PermissionMode,
+    wsId: string, agentId: string, sessionId: string, definitionName: string, prompt: string, cwd: string,
+    permissionMode: PermissionMode,
   ): void;
   cancelAgent(wsId: string, agentId: string): Promise<Settings | null>;
   listAgents(wsId: string): Promise<AgentRecord[]>;
