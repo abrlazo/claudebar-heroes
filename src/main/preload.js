@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('bar', {
   agentDefinitions: (wsId) => ipcRenderer.invoke('agents:definitions', wsId),
   runAgent: (wsId, definitionName, displayName, task, permissionMode) => ipcRenderer.invoke('agents:run', { wsId, definitionName, displayName, task, permissionMode }),
   messageAgent: (wsId, agentId, sessionId, definitionName, prompt, cwd, permissionMode) => ipcRenderer.send('agents:message', { wsId, agentId, sessionId, definitionName, prompt, cwd, permissionMode }),
+  projectHasReview: (wsId) => ipcRenderer.invoke('agents:hasReview', wsId),
   cancelAgent: (wsId, agentId) => ipcRenderer.invoke('agents:cancel', { wsId, agentId }),
   listAgents: (wsId) => ipcRenderer.invoke('agents:list', wsId),
 

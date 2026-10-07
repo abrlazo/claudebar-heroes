@@ -101,7 +101,7 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent }, emit) {
 
   let buffer = '';
   let stderr = '';
-  const state = { streamedText: false };
+  const state = { streamedText: false, subagents: new Map() };
 
   child.stdout.on('data', (chunk) => {
     buffer += chunk.toString();
@@ -139,15 +139,61 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent }, emit) {
   return handle;
 }
 
+// Claude's own delegations: its Agent tool (called Task in older versions) with a `subagent_type`.
+const DELEGATE_TOOLS = new Set(['Agent', 'Task']);
+const MAX_DELEGATE_TEXT = 4000;
+
+const cap = (value, max) => {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text.length > max ? `${text.slice(0, max - 3)}...` : text;
+};
+
+/** The text of a tool_result block (a string, or a list of text blocks). */
+function resultText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.filter((c) => c?.type === 'text' && typeof c.text === 'string').map((c) => c.text).join('\n');
+}
+
+/**
+ * A finished subagent's tool_result arrives wrapped: a "[Subagent hand-back]" header, the report
+ * indented by two spaces, then "agentId: ..." and a <usage> line. Keep just the report.
+ */
+function subagentReport(raw) {
+  let text = raw;
+  const marker = 'The report follows:';
+  const at = text.indexOf(marker);
+  if (at !== -1) {
+    text = text.slice(at + marker.length).replace(/^\n/, '');
+    text = text.replace(/\nagentId:[\s\S]*$/, '').replace(/^ {2}/gm, '');
+  }
+  return cap(text, MAX_DELEGATE_TEXT);
+}
+
+/** Emits the end of a delegation once; later signals for the same call are ignored. */
+function endSubagent(state, emit, toolUseId, isError, text) {
+  const record = state.subagents.get(toolUseId);
+  if (!record || record.ended) return;
+  record.ended = true;
+  emit({ type: 'subagent', phase: 'end', toolUseId, isError, text });
+}
+
 // `state.streamedText` tells an assistant message whose text already arrived as deltas apart from
 // one that did not: built-in commands (/context, /usage...) answer with a complete message and no deltas.
+// Messages with `parent_tool_use_id` were produced inside a subagent (the Agent call with that id).
 function handleMessage(msg, emit, state) {
+  const inner = typeof msg.parent_tool_use_id === 'string' ? msg.parent_tool_use_id : null;
   switch (msg.type) {
     case 'system':
       if (msg.subtype === 'init') emit({ type: 'session', sessionId: msg.session_id, model: msg.model });
+      // A background agent's result only arrives as a notification (its tool_result is a launch notice).
+      else if (msg.subtype === 'task_notification' && state.subagents.get(msg.tool_use_id)?.background) {
+        endSubagent(state, emit, msg.tool_use_id, msg.status !== 'completed', cap(msg.summary, MAX_DELEGATE_TEXT));
+      }
       break;
 
     case 'stream_event': {
+      if (inner) break; // a subagent's own model calls are not the chat's text, thinking or tokens
       const ev = msg.event;
       // One message_delta per model call, carrying that call's final usage.
       if (ev?.type === 'message_start' && ev.message?.usage) {
@@ -167,16 +213,48 @@ function handleMessage(msg, emit, state) {
     }
 
     case 'assistant':
+      if (inner) {
+        // Work inside a subagent: sent to that subagent, not as the chat's own tool lines and text.
+        for (const block of msg.message?.content || []) {
+          if (block.type === 'tool_use') {
+            emit({ type: 'subagent', phase: 'event', toolUseId: inner, inner: 'tool', name: block.name, summary: summarizeToolInput(block.input) });
+          } else if (block.type === 'text' && block.text) {
+            emit({ type: 'subagent', phase: 'event', toolUseId: inner, inner: 'text', text: block.text });
+          }
+        }
+        break;
+      }
       // Normal replies already arrived as deltas, so only tool calls are picked out here;
       // text is emitted only when nothing was streamed (command output).
       for (const block of msg.message?.content || []) {
         if (block.type === 'tool_use') {
           emit({ type: 'tool', name: block.name, summary: summarizeToolInput(block.input) });
+          if (DELEGATE_TOOLS.has(block.name) && typeof block.input?.subagent_type === 'string' && typeof block.id === 'string') {
+            state.subagents.set(block.id, { background: false, ended: false });
+            emit({
+              type: 'subagent', phase: 'start', toolUseId: block.id,
+              agentType: cap(block.input.subagent_type, 100),
+              description: cap(block.input.description, 200),
+              prompt: cap(block.input.prompt, MAX_DELEGATE_TEXT),
+            });
+          }
         } else if (block.type === 'text' && block.text && !state.streamedText) {
           emit({ type: 'text', text: block.text });
         }
       }
       state.streamedText = false;
+      break;
+
+    case 'user':
+      // Only the chat's own tool results matter: the answer to a delegation ends it.
+      if (inner || !Array.isArray(msg.message?.content)) break;
+      for (const block of msg.message.content) {
+        if (block.type !== 'tool_result') continue;
+        const record = state.subagents.get(block.tool_use_id);
+        if (!record) continue;
+        if (msg.tool_use_result?.isAsync) record.background = true; // launch notice; the result comes later
+        else endSubagent(state, emit, block.tool_use_id, !!block.is_error, subagentReport(resultText(block.content)));
+      }
       break;
 
     case 'result':

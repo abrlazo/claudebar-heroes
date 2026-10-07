@@ -361,6 +361,13 @@ function registerIpc() {
     return ws ? agentDefinitions.listDefinitions(ws.path) : [];
   });
 
+  // Chains: does the project hold the review agent's findings file? The path comes from the workspace.
+  ipcMain.handle('agents:hasReview', (_e, wsId) => {
+    const ws = settings.get().workspaces.find((w) => w.id === wsId);
+    if (!ws || typeof ws.path !== 'string') return false;
+    try { return fs.statSync(path.join(ws.path, '.claude', 'review.md')).isFile(); } catch { return false; }
+  });
+
   // "/<agent> <task>": runs ONE agent in its own process (its own tab and orb in the UI).
   // The name must match a definition under .claude/agents/; anything else is refused.
   ipcMain.handle('agents:run', (_e, { wsId, definitionName, displayName, task, permissionMode }) => {
