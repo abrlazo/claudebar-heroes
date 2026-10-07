@@ -10,6 +10,7 @@
     "dev": "vite build && electron . --dev",
     "watch": "vite build --watch",
     "typecheck": "tsc --noEmit",
+    "check": "node tools/check-roster.mjs",
     "simulate": "vite build && node tools/simulate-agents.mjs"
   },
   "devDependencies": {

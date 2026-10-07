@@ -20,7 +20,7 @@ const outDir = outFlag > -1 ? path.resolve(process.argv[outFlag + 1]) : fs.mkdte
 fs.mkdirSync(outDir, { recursive: true });
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'cbh-sim-'));
-const port = 9300 + Math.floor(Math.random() * 90);
+let port = 9300 + Math.floor(Math.random() * 90);
 
 // ----- fake claude -----
 const fake = path.join(work, 'fake-claude.sh');
@@ -37,6 +37,14 @@ if [ "$stream_in" = "1" ]; then
 fi
 prompt=$(cat)
 sid="sim-$RANDOM"
+# "Design this hero" (a one-shot --output-format json call): count it, then answer by name.
+if [[ "$prompt" == *"You design pixel-art RPG heroes"* ]]; then
+  echo design >> "$FAKE_COUNT"
+  if [[ "$prompt" == *'"slow thing"'* ]]; then sleep 40; exit 0; fi
+  if [[ "$prompt" == *'"broken one"'* ]]; then cat "$(dirname "$0")/design-broken.json"; exit 0; fi
+  cat "$(dirname "$0")/design-ok.json"
+  exit 0
+fi
 if [[ "$prompt" == /context* ]]; then
   printf '%s\\n' "{\\"type\\":\\"system\\",\\"subtype\\":\\"init\\",\\"session_id\\":\\"$sid\\",\\"model\\":\\"fake\\"}"
   printf '%s\\n' "{\\"type\\":\\"assistant\\",\\"message\\":{\\"content\\":[{\\"type\\":\\"text\\",\\"text\\":\\"CONTEXT-OUTPUT\\"}]}}"
@@ -55,6 +63,17 @@ if [[ "$prompt" == *DELEGATE* ]]; then
   play="$(dirname "$0")/delegate-alpha.jsonl"
   if [[ "$prompt" == *BUILTIN* ]]; then play="$(dirname "$0")/delegate-builtin.jsonl"; fi
   while IFS= read -r line; do printf '%s\\n' "$line"; sleep 1; done < "$play"
+  exit 0
+fi
+# A long run (about 75 s, a tool call every 3 s) so the hero has time to beat a map boss.
+if [[ "$prompt" == *LONGRUN* ]]; then
+  printf '%s\\n' "{\\"type\\":\\"system\\",\\"subtype\\":\\"init\\",\\"session_id\\":\\"$sid\\",\\"model\\":\\"fake\\"}"
+  trap 'exit 130' INT  # Stop sends SIGINT; \`wait\` lets the trap run at once instead of after the sleep
+  for i in $(seq 1 25); do
+    sleep 3 & wait $!
+    printf '%s\\n' "{\\"type\\":\\"assistant\\",\\"message\\":{\\"content\\":[{\\"type\\":\\"tool_use\\",\\"name\\":\\"Read\\",\\"input\\":{\\"file_path\\":\\"/repo/long.ts\\"}}]}}"
+  done
+  printf '%s\\n' "{\\"type\\":\\"result\\",\\"is_error\\":false,\\"session_id\\":\\"$sid\\",\\"total_cost_usd\\":0.002,\\"num_turns\\":3,\\"duration_ms\\":75000}"
   exit 0
 fi
 dur=$(( (RANDOM % 5) + 6 ))
@@ -94,6 +113,19 @@ const delegation = (subagentType, toolUseId, prompt) => {
 fs.writeFileSync(path.join(work, 'delegate-alpha.jsonl'), `${delegation('alpha', 'toolu_sim_alpha', 'DELEGATED-PROMPT review the change')}\n`);
 fs.writeFileSync(path.join(work, 'delegate-builtin.jsonl'), `${delegation('Explore', 'toolu_sim_explore', 'EXPLORE-PROMPT look around')}\n`);
 
+// Canned answers to the hero design call: a fenced spec (extraction), and prose without JSON.
+const cannedSpec = {
+  cls: 'Ninja', weapon: 'daggers', body: 'gi', gear: 'headband', hair: 'spiky', shield: false, cape: true, stache: false, glasses: false,
+  colors: { skin: '#f3c9a6', hair: '#f5d142', primary: '#123456', secondary: '#e0a030', accent: '#c0392b', pants: '#123456', boots: '#7a4a24', metal: '#cfd8e3' },
+  stats: { hp: 140, atk: 150, def: 100, spd: 130 },
+  name: 'IGNORED', evil: { x: 1 },
+};
+const wrap = (result) => `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result })}\n`;
+fs.writeFileSync(path.join(work, 'design-ok.json'), wrap(`Here you go:\n\`\`\`json\n${JSON.stringify(cannedSpec)}\n\`\`\``));
+fs.writeFileSync(path.join(work, 'design-broken.json'), wrap('sorry, no json here'));
+const designCount = path.join(work, 'design-count.txt');
+const designCalls = () => (fs.existsSync(designCount) ? fs.readFileSync(designCount, 'utf8').split('\n').filter(Boolean).length : 0);
+
 // ----- a throwaway project with three agents (and a skill, which is not an agent) -----
 const project = path.join(work, 'project');
 fs.mkdirSync(path.join(project, '.claude', 'agents'), { recursive: true });
@@ -121,9 +153,11 @@ fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
   }],
 }));
 
-const app = spawn(electronBin, [root, `--user-data-dir=${userData}`, `--remote-debugging-port=${port}`], {
-  env: { ...process.env, CLAUDE_BIN: fake }, stdio: 'ignore',
+const launch = (dir, env = {}) => spawn(electronBin, [root, `--user-data-dir=${dir}`, `--remote-debugging-port=${port}`], {
+  env: { ...process.env, CLAUDE_BIN: fake, FAKE_COUNT: path.join(work, 'design-count.txt'), ...env }, stdio: 'ignore',
 });
+let app = launch(userData);
+const pageErrors = [];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
@@ -141,7 +175,7 @@ async function connect() {
   }
   if (!ws) throw new Error('app did not start');
   let id = 0; const pending = new Map();
-  ws.onmessage = (m) => { const d = JSON.parse(m.data); if (d.id && pending.has(d.id)) { pending.get(d.id)(d); pending.delete(d.id); } };
+  ws.onmessage = (m) => { const d = JSON.parse(m.data); if (d.method === 'Runtime.exceptionThrown') pageErrors.push(d.params.exceptionDetails?.text || 'exception'); if (d.id && pending.has(d.id)) { pending.get(d.id)(d); pending.delete(d.id); } };
   await new Promise((r) => { ws.onopen = r; });
   send = (method, params = {}) => new Promise((r) => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
   await send('Runtime.enable');
@@ -217,6 +251,13 @@ try {
   }
   await sleep(3500);
   await shot('1-agents-running');
+  // Wisps glow: a running wisp carries a drop-shadow glow filter.
+  const wispFilter = await ev('getComputedStyle(document.querySelector(".minion:not(.calm) canvas")).filter');
+  check('a running wisp has a glow (drop-shadow filter)', /drop-shadow/.test(wispFilter || ''), String(wispFilter).slice(0, 80));
+  await ev('document.body.classList.add("theme-light")');
+  await sleep(300);
+  await shot('1b-agents-running-light');
+  await ev('document.body.classList.remove("theme-light")');
 
   const tabs = await ev('document.querySelectorAll(".agent-tab").length');
   check('/alpha, /beta, /gamma each started an agent (plus the Expedition tab)', tabs === 4, `${tabs} tabs`);
@@ -430,6 +471,304 @@ try {
   const toolLinesAfter = await ev('document.querySelectorAll("#tab-project-chat .msg.tool").length');
   const toolTexts = await ev('[...document.querySelectorAll("#tab-project-chat .msg.tool")].map(m=>m.textContent).join("|")');
   check('delegation: ...it stays a tool line plus its inner calls, as before', toolLinesAfter - toolLinesBefore === 3 && /Grep/.test(toolTexts), `${toolLinesAfter - toolLinesBefore} new tool lines`);
+
+  // ===== Phase 2: map bosses, trophies, crits and combos, in a second app run with its own settings =====
+  // Gandalf (a summoned hero with high ATK) at 4 kills on the forest map, in the light theme. The settings
+  // have no "trophies" field, like a file written by an older version.
+  ws.close(); ws = undefined; app.kill();
+  await sleep(1000);
+  port += 1;
+  const userData2 = path.join(work, 'userData2');
+  fs.mkdirSync(userData2);
+  fs.writeFileSync(path.join(userData2, 'settings.json'), JSON.stringify({
+    permissionMode: 'default', windowPos: null, theme: 'light', panelHeight: 500, activeId: 'sim-boss',
+    workspaces: [{
+      id: 'sim-boss', path: project, name: 'bossrun', heroSeed: 'summon:gandalf',
+      usage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }, lastContext: 0, contextWindow: 200000,
+      kills: 4, map: 'forest', sessionId: null, messages: [], agents: [],
+    }],
+  }));
+  app = launch(userData2);
+  await connect();
+  await sleep(1500);
+  await click('#toggle-panel');
+  await sleep(900);
+  const openTabByLabel = (label) => ev(`[...document.querySelectorAll(".panel-tabs .tab")].find(t=>t.textContent===${JSON.stringify(label)})?.click()`);
+
+  // Trophy shelf from an old settings file: five locked slots, no errors. addTrophy validates the boss id.
+  await openTabByLabel('Status');
+  await sleep(400);
+  const slots = await ev('JSON.stringify({all:document.querySelectorAll(".trophy").length,locked:document.querySelectorAll(".trophy.locked").length,painted:[...document.querySelectorAll(".trophy canvas")].every(c=>c.width>0)})');
+  check('trophies: an old settings file (no "trophies") shows five locked slots', slots === JSON.stringify({ all: 5, locked: 5, painted: true }), slots);
+  const evAsync = async (expr) => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result.result.value;
+  await evAsync('window.bar.addTrophy("sim-boss", "boss:bogus")');
+  await evAsync('window.bar.addTrophy("sim-boss", "__proto__")');
+  const afterBogus = JSON.parse(await evAsync('window.bar.getSettings().then(s=>JSON.stringify(s.workspaces[0].trophies))'));
+  check('trophies: addTrophy ignores a boss id that is not a known boss', Object.keys(afterBogus).length === 0, JSON.stringify(afterBogus));
+  await shot('6-trophies-empty');
+  await openTabByLabel('Expedition');
+  await sleep(300);
+
+  // Record the stage with an observer: monsters and numbers are gone within a second.
+  await ev(`(()=>{
+    const sim = window.__sim = { bossSeen: null, bossPeak: 0, normalAfterBoss: 0, bossDying: false, crit: 0, combos: [], seen: new WeakSet() };
+    const stage = document.getElementById('stage');
+    const scan = () => {
+      const bosses = [...stage.querySelectorAll('.enemy.boss:not(.dying):not(.fleeing)')];
+      sim.bossPeak = Math.max(sim.bossPeak, bosses.length);
+      for (const e of stage.querySelectorAll('.enemy:not(.boss)')) {
+        if (!sim.seen.has(e)) { sim.seen.add(e); if (bosses.length) sim.normalAfterBoss++; }
+      }
+      if (bosses[0] && !sim.bossSeen) {
+        const alive = stage.querySelectorAll('.enemy:not(.boss):not(.dying):not(.fleeing)').length;
+        sim.bossSeen = { name: bosses[0].querySelector('.enemy-name')?.textContent, canvasW: bosses[0].querySelector('canvas').clientWidth,
+          mapInfo: document.getElementById('map-info').textContent, normalAlive: alive };
+      }
+      if (stage.querySelector('.enemy.boss.dying')) sim.bossDying = true;
+      for (const d of stage.querySelectorAll('.damage.crit')) if (!sim.seen.has(d)) { sim.seen.add(d); sim.crit++; }
+      const c = stage.querySelector('.combo')?.textContent; if (c && !sim.combos.includes(c)) sim.combos.push(c);
+    };
+    new MutationObserver(scan).observe(stage, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'], characterData: true });
+  })()`);
+  await ev('globalThis.__cbhBossChance = 1'); // bosses are rare (5%); this run needs one every stage
+  await ev(`(()=>{
+    const sim = window.__sim; sim.bossEls = new WeakSet(); sim.bossCount = 0;
+    const stage = document.getElementById('stage');
+    new MutationObserver(() => { for (const e of stage.querySelectorAll('.enemy.boss')) if (!sim.bossEls.has(e)) { sim.bossEls.add(e); sim.bossCount++; } })
+      .observe(stage, { childList: true, subtree: true });
+  })()`);
+  await sendText('LONGRUN go');
+  let bossSeen = null;
+  for (let i = 0; i < 400 && !bossSeen; i++) { await sleep(150); bossSeen = JSON.parse(await ev('JSON.stringify(window.__sim.bossSeen)')); }
+  check('boss: one appears at the end of the map (not before the 8th fight)', !!bossSeen && /^Forest [4-7]\/8/.test(bossSeen.mapInfo) && bossSeen.normalAlive + Number(bossSeen.mapInfo.match(/(\d)\/8/)?.[1]) >= 6, JSON.stringify(bossSeen));
+  check('boss: it has its own name tag and is drawn bigger than a normal monster (66px canvas)', bossSeen?.name === 'Grukk, Orc King' && bossSeen?.canvasW === 66, JSON.stringify(bossSeen));
+  // The roll is made once per stage: with the chance now 0, a stop (hero sleeps) and a new run still meet the boss.
+  await ev('globalThis.__cbhBossChance = 0');
+  await click('#tab-project-chat .stop');
+  for (let i = 0; i < 40 && (await ev('!!document.querySelector("#tab-project-chat .stop")')); i++) await sleep(250);
+  await sleep(2500);
+  await sendText('LONGRUN again');
+  let bossAgain = false;
+  for (let i = 0; i < 300 && !bossAgain; i++) { await sleep(150); bossAgain = (await ev('window.__sim.bossCount')) >= 2; }
+  check('boss roll: stays the same across sleep/wake (the boss returns in the same stage even with chance 0)', bossAgain, `${await ev('window.__sim.bossCount')} bosses seen, ${await ev('document.getElementById("map-info").textContent')}`);
+  // Once it is on screen next to the hero (while it is alive), take a picture.
+  for (let i = 0; i < 40; i++) {
+    const near = await ev('(()=>{const b=document.querySelector(".enemy.boss:not(.dying)");const s=document.getElementById("stage").getBoundingClientRect();return !!b&&b.getBoundingClientRect().right<s.right-20})()');
+    if (near) break;
+    await sleep(150);
+  }
+  await shot('5-boss');
+  const fit = JSON.parse(await ev('JSON.stringify((()=>{const b=document.querySelector(".enemy.boss:not(.dying)");if(!b)return null;const r=b.getBoundingClientRect();const s=document.getElementById("stage").getBoundingClientRect();return {topInside:r.top>=s.top-0.5,bottomInside:r.bottom<=s.bottom+0.5}})())'));
+  check('boss: it fits inside the stage vertically (bar, sprite and name tag not clipped)', fit === null || (fit.topInside && fit.bottomInside), JSON.stringify(fit));
+  for (let i = 0; i < 300 && !(await ev('window.__sim.bossDying')); i++) await sleep(150);
+  check('boss: the hero beats it', await ev('window.__sim.bossDying'));
+  check('boss: only one at a time, and no normal monster spawned behind it', (await ev('window.__sim.bossPeak')) === 1 && (await ev('window.__sim.normalAfterBoss')) === 0, `peak ${await ev('window.__sim.bossPeak')}, normal after ${await ev('window.__sim.normalAfterBoss')}`);
+  await sleep(3000);
+  const mapAfter = await ev('document.getElementById("map-info").textContent');
+  check('boss: the stage clears into the next map (Desert 0/8)', /^Desert 0\/8/.test(mapAfter), mapAfter);
+  await openTabByLabel('Status');
+  await sleep(500);
+  const shelf = await ev('JSON.stringify({open:[...document.querySelectorAll(".trophy:not(.locked)")].map(t=>t.querySelector(".trophy-count")?.textContent),locked:document.querySelectorAll(".trophy.locked").length})');
+  check('trophies: the shelf shows the defeated boss as "x1" and the other four locked', shelf === JSON.stringify({ open: ['x1'], locked: 4 }), shelf);
+  await shot('7-trophies');
+  await sleep(1500);
+  const saved = JSON.parse(fs.readFileSync(path.join(userData2, 'settings.json'), 'utf8')).workspaces[0];
+  check('trophies: saved in settings.json with the kills and the new map', saved.trophies?.['boss:forest']?.count === 1 && saved.trophies['boss:forest'].firstAt > 0 && saved.kills === 8 && saved.map === 'desert', JSON.stringify({ t: saved.trophies, kills: saved.kills, map: saved.map }));
+  await openTabByLabel('Expedition');
+  await sleep(300);
+
+  // Crits and combos keep coming while the long run goes on (desert monsters now).
+  for (let i = 0; i < 300 && !((await ev('window.__sim.crit')) > 0 && (await ev('window.__sim.combos.length')) > 0); i++) await sleep(150);
+  check('crit: a critical hit shows an orange ".damage.crit" number', (await ev('window.__sim.crit')) > 0);
+  const combos = JSON.parse(await ev('JSON.stringify(window.__sim.combos)'));
+  check('combo: consecutive kills show "xN COMBO"', combos.length > 0 && combos.every((c) => /^x\d+ COMBO$/.test(c)), combos.join(','));
+  if (await ev('!!document.querySelector("#tab-project-chat .stop")')) await click('#tab-project-chat .stop');
+  await ev('0');
+  for (let i = 0; i < 60 && !(await ev('document.getElementById("hero").classList.contains("sleeping")')); i++) await sleep(250);
+  await sleep(4500);
+  const comboLeft = await ev('JSON.stringify([document.querySelector("#stage .combo")?.textContent, document.getElementById("hero").classList.contains("sleeping"), !!document.querySelector("#tab-project-chat .stop")])');
+  check('combo: it is cleared once the hero goes to sleep', comboLeft === JSON.stringify(['', true, false]), comboLeft);
+  check('no page errors during the boss run', pageErrors.length === 0, pageErrors.join(' | '));
+
+  // ===== Phase 2b: chance 0 never shows a boss and the stage still clears at 8 kills =====
+  ws.close(); ws = undefined; app.kill();
+  await sleep(1000);
+  port += 1;
+  const userData2b = path.join(work, 'userData2b');
+  fs.mkdirSync(userData2b);
+  fs.writeFileSync(path.join(userData2b, 'settings.json'), JSON.stringify({
+    permissionMode: 'default', windowPos: null, theme: 'light', panelHeight: 500, activeId: 'sim-nob',
+    workspaces: [{
+      id: 'sim-nob', path: project, name: 'nobossrun', heroSeed: 'summon:gandalf',
+      usage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }, lastContext: 0, contextWindow: 200000,
+      kills: 6, map: 'forest', sessionId: null, messages: [], agents: [],
+    }],
+  }));
+  app = launch(userData2b);
+  await connect();
+  await sleep(1500);
+  await click('#toggle-panel');
+  await sleep(900);
+  await ev('globalThis.__cbhBossChance = 0');
+  await ev(`(()=>{
+    const sim = window.__nob = { bosses: 0, normal: 0, seen: new WeakSet() };
+    const stage = document.getElementById('stage');
+    new MutationObserver(() => {
+      for (const e of stage.querySelectorAll('.enemy')) if (!sim.seen.has(e)) { sim.seen.add(e); if (e.classList.contains('boss')) sim.bosses++; else sim.normal++; }
+      if (stage.querySelector('.enemy.boss')) sim.bosses = Math.max(sim.bosses, 1);
+    }).observe(stage, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+  })()`);
+  {
+    const ta2 = '#tab-project-chat textarea';
+    await type(ta2, 'LONGRUN go'); await sleep(150); await click('#tab-project-chat .send');
+  }
+  let clearedNoBoss = false;
+  for (let i = 0; i < 500 && !clearedNoBoss; i++) { await sleep(200); clearedNoBoss = /^Desert 0\/8/.test(await ev('document.getElementById("map-info").textContent')); }
+  check('boss chance 0: the stage still clears at 8 kills (Desert 0/8)', clearedNoBoss, await ev('document.getElementById("map-info").textContent'));
+  await sleep(4000);
+  const nob = JSON.parse(await ev('JSON.stringify(window.__nob)'));
+  check('boss chance 0: no boss appeared, normal monsters did', nob.bosses === 0 && nob.normal >= 2, JSON.stringify(nob));
+  await sleep(1500);
+  const savedNob = JSON.parse(fs.readFileSync(path.join(userData2b, 'settings.json'), 'utf8')).workspaces[0];
+  check('boss chance 0: no trophy, kills and map saved', Object.keys(savedNob.trophies).length === 0 && savedNob.kills >= 8 && savedNob.map === 'desert', JSON.stringify({ t: savedNob.trophies, kills: savedNob.kills, map: savedNob.map }));
+  check('boss chance 0: no page errors', pageErrors.length === 0, pageErrors.join(' | '));
+
+  // ===== Phase 2c: one-time trophy reset (migration) that survives a restart =====
+  ws.close(); ws = undefined; app.kill();
+  await sleep(1000);
+  port += 1;
+  const userData2c = path.join(work, 'userData2c');
+  fs.mkdirSync(userData2c);
+  const readSaved = () => JSON.parse(fs.readFileSync(path.join(userData2c, 'settings.json'), 'utf8'));
+  fs.writeFileSync(path.join(userData2c, 'settings.json'), JSON.stringify({
+    permissionMode: 'default', windowPos: null, theme: 'dark', panelHeight: 500, activeId: 'sim-mig',
+    workspaces: [{
+      id: 'sim-mig', path: project, name: 'migrun', heroSeed: 'simulation-seed',
+      usage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }, lastContext: 0, contextWindow: 200000,
+      kills: 21, map: 'desert', sessionId: null, messages: [], agents: [],
+      trophies: { 'boss:forest': { count: 3, firstAt: 1 }, 'boss:lava': { count: 1, firstAt: 2 } },
+    }],
+  }));
+  app = launch(userData2c);
+  await connect();
+  await sleep(1500);
+  const evA = async (expr) => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result.result.value;
+  const mig1 = JSON.parse(await evA('window.bar.getSettings().then(s=>JSON.stringify(s))'));
+  check('migration: trophies are reset, kills, map and the marker are kept', JSON.stringify(mig1.workspaces[0].trophies) === '{}' && mig1.workspaces[0].kills === 21 && mig1.workspaces[0].map === 'desert' && mig1.migrations?.trophyResetV1 === true, JSON.stringify({ t: mig1.workspaces[0].trophies, k: mig1.workspaces[0].kills, m: mig1.migrations }));
+  const onDisk = readSaved();
+  check('migration: the marker is on disk at once (before any other change)', onDisk.migrations?.trophyResetV1 === true && JSON.stringify(onDisk.workspaces[0].trophies) === '{}' && onDisk.workspaces[0].kills === 21);
+  await click('#toggle-panel');
+  await sleep(900);
+  await ev('[...document.querySelectorAll(".panel-tabs .tab")].find(t=>t.textContent==="Status")?.click()');
+  await sleep(500);
+  const shelf2 = await ev('JSON.stringify({locked:document.querySelectorAll(".trophy.locked").length,all:document.querySelectorAll(".trophy").length,hint:document.querySelector(".trophy-hint")?.textContent})');
+  check('migration: the shelf shows five locked slots and the rarity hint', shelf2 === JSON.stringify({ locked: 5, all: 5, hint: 'Bosses appear rarely (about 1 in 20 stages).' }), shelf2);
+  await shot('11-trophies-reset');
+  await evA('window.bar.addTrophy("sim-mig", "boss:snowy")');
+  await evA('window.bar.updateSettings({ migrations: {} })');
+  await evA('window.bar.setSettings({ migrations: {} })');
+  const mig2 = JSON.parse(await evA('window.bar.getSettings().then(s=>JSON.stringify(s))'));
+  check('migration: the renderer cannot clear the marker (settings:update and settings:set)', mig2.migrations?.trophyResetV1 === true && mig2.workspaces[0].trophies['boss:snowy']?.count === 1, JSON.stringify(mig2.migrations));
+  await sleep(1500);
+  ws.close(); ws = undefined; app.kill();
+  await sleep(1000);
+  port += 1;
+  app = launch(userData2c);
+  await connect();
+  await sleep(1500);
+  const mig3 = JSON.parse(await evA('window.bar.getSettings().then(s=>JSON.stringify(s))'));
+  check('migration: a trophy earned afterwards survives a restart, the reset does not run again', mig3.workspaces[0].trophies['boss:snowy']?.count === 1 && mig3.migrations?.trophyResetV1 === true && mig3.workspaces[0].kills === 21, JSON.stringify({ t: mig3.workspaces[0].trophies, m: mig3.migrations }));
+  check('migration: no page errors', pageErrors.length === 0, pageErrors.join(' | '));
+
+  // ===== Phase 3: "summon <name>": hand-built characters, and a look designed by Claude for any other name =====
+  ws.close(); ws = undefined; app.kill();
+  await sleep(1000);
+  port += 1;
+  const userData3 = path.join(work, 'userData3');
+  fs.mkdirSync(userData3);
+  const summonSettings = {
+    permissionMode: 'default', windowPos: null, theme: 'light', panelHeight: 500, activeId: 'sim-summon',
+    workspaces: [{
+      id: 'sim-summon', path: project, name: 'summonrun', heroSeed: 'summon:pikachu',
+      usage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }, lastContext: 0, contextWindow: 200000,
+      kills: 0, map: 'forest', sessionId: null, messages: [], agents: [],
+    }],
+  };
+  fs.writeFileSync(path.join(userData3, 'settings.json'), JSON.stringify(summonSettings));
+  app = launch(userData3, { HERO_DESIGN_TIMEOUT_MS: '3000' });
+  await connect();
+  await sleep(1500);
+  await click('#toggle-panel');
+  await sleep(900);
+  const saved3 = async () => JSON.parse(await evAsync('window.bar.getSettings().then(s=>JSON.stringify(s))'));
+  const heroName = () => ev('document.getElementById("hero-name").textContent');
+  const chatMeta = () => ev('[...document.querySelectorAll("#tab-project-chat .msg.meta")].map(m=>m.textContent).join(" | ")');
+  const waitFor = async (fn, tries = 60) => { for (let i = 0; i < tries; i++) { if (await fn()) return true; await sleep(250); } return false; };
+
+  check('summon: a hand-built hero (Pikachu) is shown under its name, no page errors', (await heroName()) === 'Pikachu' && pageErrors.length === 0, await heroName());
+  await shot('8-summon-pikachu');
+  await sendText('summon Naruto');
+  await waitFor(async () => (await heroName()) === 'Naruto');
+  check('summon: a famous name swaps the hero without calling Claude to design it', (await heroName()) === 'Naruto' && designCalls() === 0, `${await heroName()}, ${designCalls()} calls`);
+
+  await sendText('summon Zorblax');
+  const designed = await waitFor(async () => !!(await saved3()).workspaces[0].heroDesign);
+  const s3 = await saved3();
+  check('design: a new name gets a design from Claude (fenced JSON), saved on the workspace', designed && s3.workspaces[0].heroSeed === 'summon:zorblax' && s3.workspaces[0].heroDesign.colors.primary === '#123456', JSON.stringify(s3.workspaces[0].heroDesign)?.slice(0, 120));
+  check('design: only the allowed keys were kept (no "name", no extra keys)', !('name' in s3.workspaces[0].heroDesign) && !('evil' in s3.workspaces[0].heroDesign));
+  check('design: it is also remembered by name', s3.summonDesigns?.zorblax?.colors?.primary === '#123456' && designCalls() === 1, `${designCalls()} calls`);
+  await sleep(500);
+  check('design: the hero shows under the asked name and the chat says it was designed by Claude', (await heroName()) === 'Zorblax' && /designed by Claude/.test(await chatMeta()), `${await heroName()}`);
+  await shot('9-summon-designed');
+
+  await sendText('summon Naruto');
+  await waitFor(async () => (await heroName()) === 'Naruto');
+  check('design: switching to a hand-built hero clears the designed look', (await saved3()).workspaces[0].heroDesign === null);
+  await sendText('summon Zorblax');
+  await waitFor(async () => (await heroName()) === 'Zorblax');
+  await sleep(500);
+  const again = await saved3();
+  check('design: summoning the same name again reuses the saved design (no second call to Claude)', designCalls() === 1 && again.workspaces[0].heroDesign?.colors?.primary === '#123456', `${designCalls()} calls`);
+
+  await sendText('summon broken one');
+  await waitFor(async () => /Could not design a look for Broken One/.test(await chatMeta()));
+  const broken = await saved3();
+  check('fallback: an answer without JSON keeps the generated hero and says so', /Could not design a look for Broken One \(invalid answer\)/.test(await chatMeta()) && broken.workspaces[0].heroSeed === 'summon:broken one' && broken.workspaces[0].heroDesign === null && (await heroName()) === 'Broken One', `${await heroName()} | ${(await chatMeta()).slice(-200)} | ${JSON.stringify(broken.workspaces[0].heroDesign)}`);
+  check('fallback: a failed design is not saved', !('broken one' in (broken.summonDesigns || {})));
+
+  const slowStart = Date.now();
+  await sendText('summon slow thing');
+  await waitFor(async () => /Could not design a look for Slow Thing/.test(await chatMeta()), 40);
+  check('fallback: a slow Claude times out (3 s here) and the app stays responsive', /Could not design a look for Slow Thing \(timeout\)/.test(await chatMeta()) && Date.now() - slowStart < 9000 && (await heroName()) === 'Slow Thing', `${Date.now() - slowStart} ms`);
+
+  // The renderer cannot hand over a design: reroll takes a seed only, settings:set drops workspaces.
+  await sendText('summon Zorblax');
+  await waitFor(async () => (await saved3()).workspaces[0].heroDesign?.colors?.primary === '#123456');
+  await evAsync('window.bar.rerollHero("sim-summon", { evil: 1, heroDesign: { colors: { primary: "#ff0000" } } })');
+  const afterObj = (await saved3()).workspaces[0];
+  check('inject: rerollHero with an object gives a random hero and no design', typeof afterObj.heroSeed === 'string' && !afterObj.heroSeed.startsWith('summon:') && afterObj.heroDesign === null, afterObj.heroSeed);
+  await evAsync('window.bar.rerollHero("sim-summon", "summon:zorblax")');
+  await evAsync('window.bar.setSettings({ workspaces: [], summonDesigns: { zorblax: { colors: { primary: "#ff0000" } } } })');
+  const afterSet = await saved3();
+  check('inject: settings:set cannot replace workspaces or saved designs', afterSet.workspaces.length === 1 && afterSet.summonDesigns.zorblax.colors.primary === '#123456' && afterSet.workspaces[0].heroDesign?.colors?.primary === '#123456');
+  const bad = await evAsync('window.bar.designSummon("sim-summon", "Bad<Name>").then(r=>JSON.stringify(r))');
+  check('inject: designSummon rejects a name that is not a plain summon name', JSON.parse(bad).ok === false && designCalls() === 3, `${bad} ${designCalls()} calls`);
+  check('summon: no page errors', pageErrors.length === 0, pageErrors.join(' | '));
+  await sleep(1000);
+
+  // After a restart the designed hero is still there, with Claude unreachable.
+  ws.close(); ws = undefined; app.kill();
+  await sleep(1000);
+  port += 1;
+  app = launch(userData3, { CLAUDE_BIN: path.join(work, 'no-such-claude') });
+  await connect();
+  await sleep(2000);
+  await click('#toggle-panel');
+  await sleep(600);
+  const restored = await saved3();
+  check('restart: the designed hero is still worn, offline', restored.workspaces[0].heroDesign?.colors?.primary === '#123456' && (await heroName()) === 'Zorblax', await heroName());
+  await shot('10-summon-restored');
+  check('restart: no page errors', pageErrors.length === 0, pageErrors.join(' | '));
 } catch (err) {
   console.log(`FAIL  simulation error: ${err.message}`);
   results.push(false);
