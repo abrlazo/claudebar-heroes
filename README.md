@@ -28,7 +28,7 @@ npm start
 | `npm run build` | Bundles the UI into `dist/renderer` without launching |
 | `npm run typecheck` | Runs `tsc --noEmit` over `src/renderer` |
 | `npm run check` | Validates the character roster, hero-design allowlists, boss roll helpers (`tools/check-roster.mjs`) and that the level aura stays within the hero's body width (`tools/check-aura.mjs`) |
-| `npm run simulate` | Builds, then runs 3 simulated `/<agent>` invocations against a fake `claude` and checks the UI (also map bosses, trophies, crits and combos) |
+| `npm run simulate` | Builds, then runs 3 simulated `/<agent>` invocations against a fake `claude` and checks the UI (also map bosses, trophies, crits and combos) and the aura pose (`tools/check-aura-ui.mjs`) |
 
 Open the chat with the speech-bubble button on the strip or with `Cmd/Ctrl+Shift+Space`.
 

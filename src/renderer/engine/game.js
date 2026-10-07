@@ -87,6 +87,7 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
   // Poses: run, fight, attack, victory, sleep (see sprite.js).
   function setPose(pose) {
     heroEl.classList.toggle('sleeping', pose === 'sleep');
+    aura.setLying(pose === 'sleep'); // the aura lies down exactly when the sprite does
     if (pose === 'attack') sprite.attack();
     else sprite.setPose(pose);
   }
