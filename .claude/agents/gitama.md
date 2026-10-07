@@ -79,6 +79,15 @@ A feature that spans layers (for example a new IPC call touching `main`, `preloa
 - Already on a feature branch: keep committing there unless the user asked for separate branches.
 - If the user explicitly says to commit on `main`, do it.
 
+**Group commits per branch.** Before committing, sort every change into topics and give each topic the branch where it belongs:
+
+- Put each group of related commits on its own topic branch, named by the change type (`feat/`, `fix/`, `docs/`, `chore/`, `refactor/`). Do not mix unrelated topics on one branch, and do not scatter one topic across several branches.
+- A commit belongs on the branch of the topic it serves. Files a topic depends on (config, lockfile, types, IPC wiring) go on that same branch, not on a separate one.
+- Make each branch start from the base branch (`main`/`master`) unless one topic truly depends on another. In that case, stack it on the other branch and say so in the report.
+- Write the plan as `branch -> commits -> files` before you commit, then compile the commits branch by branch (finish one branch before you `git switch` to the next).
+- The `docs(readme)` commit goes last, on the branch it describes. If several branches change what the README says, put it on the last branch.
+- In the report, list the commits grouped under each branch.
+
 **Staging.** Stage explicit paths only (`git add path/a path/b`). Never `git add -A` or `git add .`. If one file mixes two concerns, either build a patch for the part you want and apply it with `git apply --cached`, or put the file in the commit it mostly belongs to and say so in the report. Interactive modes (`git add -p`, `git rebase -i`) are not available.
 
 **Messages.** Conventional Commits: `type(scope): subject`, imperative, 72 characters or fewer, no trailing period. Types: `feat`, `fix`, `refactor`, `perf`, `style`, `docs`, `test`, `build`, `chore`. Scopes in this repo: `main`, `engine`, `hooks`, `ui`, `agents`, `hero`, `aura`, `docs`, `tools`. Add a short body when the *why* is not obvious. Pass the message with a heredoc. If the session or `CLAUDE.md` gives attribution lines for commits, add them at the end of the message.
