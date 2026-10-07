@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Claudebar Heroes - Background Previews</title>
+  <style>
+    body { background: #1a1a2e; color: white; font-family: monospace; padding: 20px; }
+    h1 { color: #667eea; }
+    .backgrounds { display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 20px; }
+    .bg-preview { border: 2px solid #667eea; border-radius: 10px; overflow: hidden; }
+    canvas { display: block; }
+    h3 { margin: 0; padding: 10px; background: #667eea; }
+  </style>
+</head>
+<body>
+  <h1>🎮 Claudebar Heroes - Background Animations</h1>
+  <p>These backgrounds animate in-game (400x200px)</p>
+
+  <div class="backgrounds">
+    <div class="bg-preview"><h3>🌋 Lava</h3><canvas id="lava" width="400" height="200"></canvas></div>
+    <div class="bg-preview"><h3>❄️ Snowy</h3><canvas id="snowy" width="400" height="200"></canvas></div>
+    <div class="bg-preview"><h3>🏜️ Desert</h3><canvas id="desert" width="400" height="200"></canvas></div>
+    <div class="bg-preview"><h3>🌲 Forest</h3><canvas id="forest" width="400" height="200"></canvas></div>
+    <div class="bg-preview"><h3>🌙 Night</h3><canvas id="night" width="400" height="200"></canvas></div>
+  </div>
+
+  <script>
+    // Lava animation
+    const lavaCanvas = document.getElementById('lava');
+    const lavaCtx = lavaCanvas.getContext('2d');
+    let lavaFrame = 0;
+    function drawLava() {
+      const gradient = lavaCtx.createLinearGradient(0, 0, 0, 200);
+      gradient.addColorStop(0, '#3a2a2a');
+      gradient.addColorStop(1, '#1a0a0a');
+      lavaCtx.fillStyle = gradient;
+      lavaCtx.fillRect(0, 0, 400, 200);
+
+      lavaCtx.fillStyle = '#ff4500';
+      for (let i = 0; i < 5; i++) {
+        const y = 60 + Math.sin(lavaFrame * 0.3 + i) * 20 + i * 20;
+        lavaCtx.beginPath();
+        for (let x = 0; x <= 400; x += 20) {
+          const waveY = y + Math.sin((x + lavaFrame * 5) * 0.02) * 10;
+          if (x === 0) lavaCtx.moveTo(x, waveY);
+          else lavaCtx.lineTo(x, waveY);
+        }
+        lavaCtx.lineTo(400, 200);
+        lavaCtx.lineTo(0, 200);
+        lavaCtx.closePath();
+        lavaCtx.fill();
+      }
+
+      lavaCtx.fillStyle = 'rgba(255, 100, 0, 0.3)';
+      lavaCtx.fillRect(0, 0, 400, 200);
+
+      lavaFrame++;
+      requestAnimationFrame(drawLava);
+    }
+    drawLava();
+
+    // Snowy animation
+    const snowyCanvas = document.getElementById('snowy');
+    const snowyCtx = snowyCanvas.getContext('2d');
+    const snowflakes = [];
+    for (let i = 0; i < 30; i++) {
+      snowflakes.push({
+        x: Math.random() * 400,
+        y: Math.random() * 200,
+        speed: Math.random() * 0.5 + 0.2,
+        size: Math.random() * 2 + 1
+      });
+    }
+    function drawSnow() {
+      const gradient = snowyCtx.createLinearGradient(0, 0, 0, 200);
+      gradient.addColorStop(0, '#b3d9ff');
+      gradient.addColorStop(1, '#e6f2ff');
+      snowyCtx.fillStyle = gradient;
+      snowyCtx.fillRect(0, 0, 400, 200);
+
+      snowyCtx.fillStyle = '#ffffff';
+      snowyCtx.fillRect(0, 150, 400, 50);
+
+      snowyCtx.fillStyle = '#ffffff';
+      for (let flake of snowflakes) {
+        flake.y += flake.speed;
+        if (flake.y > 200) flake.y = -5;
+        snowyCtx.beginPath();
+        snowyCtx.arc(flake.x, flake.y, flake.size, 0, Math.PI * 2);
+        snowyCtx.fill();
+      }
+
+      requestAnimationFrame(drawSnow);
+    }
+    drawSnow();
+
+    // Desert animation
+    const desertCanvas = document.getElementById('desert');
+    const desertCtx = desertCanvas.getContext('2d');
+    let desertFrame = 0;
+    function drawDesert() {
+      const skyGradient = desertCtx.createLinearGradient(0, 0, 0, 150);
+      skyGradient.addColorStop(0, '#ffb347');
+      skyGradient.addColorStop(1, '#ffd699');
+      desertCtx.fillStyle = skyGradient;
+      desertCtx.fillRect(0, 0, 400, 150);
+
+      desertCtx.fillStyle = '#daa520';
+      desertCtx.fillRect(0, 150, 400, 50);
+
+      desertCtx.fillStyle = '#d4a574';
+      for (let i = 0; i < 3; i++) {
+        desertCtx.beginPath();
+        for (let x = 0; x <= 400; x += 20) {
+          const y = 140 + Math.sin((x + desertFrame * 2) * 0.01 + i * 2) * 15 + i * 20;
+          if (x === 0) desertCtx.moveTo(x, y);
+          else desertCtx.lineTo(x, y);
+        }
+        desertCtx.lineTo(400, 200);
+        desertCtx.lineTo(0, 200);
+        desertCtx.closePath();
+        desertCtx.fill();
+      }
+
+      desertCtx.fillStyle = '#ff8c00';
+      desertCtx.beginPath();
+      desertCtx.arc(350, 40, 30, 0, Math.PI * 2);
+      desertCtx.fill();
+
+      desertFrame++;
+      requestAnimationFrame(drawDesert);
+    }
+    drawDesert();
+
+    // Forest animation
+    const forestCanvas = document.getElementById('forest');
+    const forestCtx = forestCanvas.getContext('2d');
+    let forestFrame = 0;
+    function drawForest() {
+      const skyGradient = forestCtx.createLinearGradient(0, 0, 0, 200);
+      skyGradient.addColorStop(0, '#87ceeb');
+      skyGradient.addColorStop(1, '#e0f6ff');
+      forestCtx.fillStyle = skyGradient;
+      forestCtx.fillRect(0, 0, 400, 200);
+
+      forestCtx.fillStyle = '#2d5a2d';
+      for (let i = 0; i < 3; i++) {
+        const x = i * 150 + (forestFrame % 5) * 2;
+        forestCtx.fillRect(x - 5, 100, 10, 100);
+        forestCtx.beginPath();
+        forestCtx.moveTo(x, 80);
+        forestCtx.lineTo(x - 20, 110);
+        forestCtx.lineTo(x + 20, 110);
+        forestCtx.closePath();
+        forestCtx.fill();
+      }
+
+      forestCtx.fillStyle = '#228b22';
+      forestCtx.fillRect(0, 140, 400, 60);
+
+      forestCtx.fillStyle = '#32cd32';
+      for (let x = 0; x < 400; x += 10) {
+        const bend = Math.sin((x + forestFrame * 3) * 0.05) * 3;
+        forestCtx.fillRect(x, 135 + bend, 8, 8);
+      }
+
+      forestFrame++;
+      requestAnimationFrame(drawForest);
+    }
+    drawForest();
+
+    // Night animation
+    const nightCanvas = document.getElementById('night');
+    const nightCtx = nightCanvas.getContext('2d');
+    const stars = [];
+    for (let i = 0; i < 40; i++) {
+      stars.push({
+        x: Math.random() * 400,
+        y: Math.random() * 150,
+        brightness: Math.random(),
+        twinkleSpeed: Math.random() * 0.05 + 0.02
+      });
+    }
+    let nightFrame = 0;
+    function drawNight() {
+      const gradient = nightCtx.createLinearGradient(0, 0, 0, 200);
+      gradient.addColorStop(0, '#0a0a1a');
+      gradient.addColorStop(0.5, '#1a0a3a');
+      gradient.addColorStop(1, '#0a0a0a');
+      nightCtx.fillStyle = gradient;
+      nightCtx.fillRect(0, 0, 400, 200);
+
+      nightCtx.fillStyle = '#ffffff';
+      for (let star of stars) {
+        star.brightness = Math.sin(nightFrame * star.twinkleSpeed) * 0.5 + 0.5;
+        nightCtx.globalAlpha = star.brightness;
+        nightCtx.beginPath();
+        nightCtx.arc(star.x, star.y, 1.5, 0, Math.PI * 2);
+        nightCtx.fill();
+      }
+      nightCtx.globalAlpha = 1;
+
+      nightCtx.fillStyle = '#ffeb3b';
+      nightCtx.beginPath();
+      nightCtx.arc(70, 50, 25, 0, Math.PI * 2);
+      nightCtx.fill();
+
+      nightCtx.fillStyle = 'rgba(255, 235, 59, 0.2)';
+      nightCtx.beginPath();
+      nightCtx.arc(70, 50, 35, 0, Math.PI * 2);
+      nightCtx.fill();
+
+      nightCtx.fillStyle = '#0a0a0a';
+      nightCtx.fillRect(0, 160, 400, 40);
+
+      nightFrame++;
+      requestAnimationFrame(drawNight);
+    }
+    drawNight();
+  </script>
+</body>
+</html>
