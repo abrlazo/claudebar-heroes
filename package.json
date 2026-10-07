@@ -1,0 +1,27 @@
+{
+  "name": "claudebar-heroes",
+  "version": "0.1.0",
+  "description": "A taskbar companion UI for Claude Code, in the style of Taskbar Hero",
+  "main": "src/main/main.js",
+  "private": true,
+  "scripts": {
+    "build": "vite build",
+    "start": "vite build && electron .",
+    "dev": "vite build && electron . --dev",
+    "watch": "vite build --watch",
+    "typecheck": "tsc --noEmit",
+    "simulate": "vite build && node tools/simulate-agents.mjs"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "electron": "^44.5.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.3"
+  },
+  "dependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  }
+}
