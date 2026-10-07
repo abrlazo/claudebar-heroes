@@ -596,12 +596,14 @@ body.theme-light .settings-controls select { border-color: #d0d0d5; }
 
 /* ---------- Level 15+ power-up aura (drawn by engine/aura.js) ---------- */
 
+/* The CSS box is 2x the canvas (W 34 x H 55 in aura.js): wide enough for the lying hero's aura,
+   anchored on the left so the standing aura stays where it was. */
 #aura-canvas {
   display: none;
   position: absolute;
   left: -6px;
   bottom: -6px;
-  width: 60px;
+  width: 68px;
   height: 110px;
   z-index: -1;
   image-rendering: pixelated;
