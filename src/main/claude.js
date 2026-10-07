@@ -343,4 +343,58 @@ function listCommands(cwd, timeoutMs = 6000) {
   });
 }
 
-module.exports = { run, resolveClaudeBinary, listCommands };
+const ASK_MAX_OUTPUT = 64 * 1024;
+
+/**
+ * One-shot question to Claude with no tools and no saved session (used to design a summoned hero).
+ * Resolves, never rejects: `{ ok: true, text }` or `{ ok: false, error: 'timeout' | 'not-found' | 'failed' | 'too-large' }`.
+ * `cwd` should be a neutral folder, never a project, so no project files or settings are loaded.
+ */
+function ask({ prompt, cwd, model, timeoutMs = 25000 }) {
+  return new Promise((resolve) => {
+    let child;
+    let settled = false;
+    let out = '';
+    const done = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        if (child?.pid) {
+          if (isWin) spawn('taskkill', ['/pid', String(child.pid), '/t', '/f']);
+          else child.kill('SIGTERM');
+        }
+      } catch { /* already gone */ }
+      resolve(value);
+    };
+    const timer = setTimeout(() => done({ ok: false, error: 'timeout' }), timeoutMs);
+    const args = ['-p', '--output-format', 'json', '--tools', '', '--max-turns', '1', '--no-session-persistence',
+      '--disable-slash-commands', '--permission-mode', 'default'];
+    if (model) args.push('--model', model);
+    try {
+      child = spawn(resolveClaudeBinary(), args, { cwd, env: childEnv(), shell: isWin });
+    } catch {
+      done({ ok: false, error: 'not-found' });
+      return;
+    }
+    child.on('error', (err) => done({ ok: false, error: err.code === 'ENOENT' ? 'not-found' : 'failed' }));
+    child.stderr.resume();
+    child.stdout.on('data', (chunk) => {
+      out += chunk.toString();
+      if (out.length > ASK_MAX_OUTPUT) done({ ok: false, error: 'too-large' });
+    });
+    child.on('close', () => {
+      try {
+        const msg = JSON.parse(out.trim().split('\n').pop() || '');
+        if (msg && msg.is_error !== true && typeof msg.result === 'string') done({ ok: true, text: msg.result });
+        else done({ ok: false, error: 'failed' });
+      } catch {
+        done({ ok: false, error: 'failed' });
+      }
+    });
+    child.stdin.on('error', () => done({ ok: false, error: 'failed' }));
+    child.stdin.end(prompt);
+  });
+}
+
+module.exports = { run, resolveClaudeBinary, listCommands, ask };

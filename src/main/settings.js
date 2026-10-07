@@ -3,6 +3,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { app } = require('electron');
+const { designFor, rememberDesign } = require('./hero-design');
 
 const DEFAULTS = {
   permissionMode: 'default',
@@ -11,6 +12,8 @@ const DEFAULTS = {
   activeId: null,
   theme: 'dark',
   panelHeight: 500,
+  migrations: {}, // one-time data migrations already applied (main only, never set by the renderer)
+  summonDesigns: {}, // validated hero designs by summoned name (lower case), see hero-design.js
 };
 
 const MAX_MESSAGES = 500;
@@ -40,6 +43,8 @@ function newWorkspace(dir, extra = {}) {
     addedAt: Date.now(),
     messages: [],
     agents: [],
+    trophies: {},
+    heroDesign: null,
     ...extra,
   };
 }
@@ -78,16 +83,31 @@ function load() {
   for (const key of LEGACY_KEYS) delete s[key];
   // XP now comes from token usage; fill in fields for older workspaces.
   s.workspaces = s.workspaces.map(({ xp, ...w }) => ({
-    usage: emptyUsage(), lastContext: 0, contextWindow: 200000, messages: [], agents: [], ...w,
+    usage: emptyUsage(), lastContext: 0, contextWindow: 200000, messages: [], agents: [], trophies: {}, heroDesign: null, ...w,
   }));
+  // One-time: bosses became rare, so every project starts with an empty trophy shelf.
+  s.migrations = { ...(raw.migrations && typeof raw.migrations === 'object' && !Array.isArray(raw.migrations) ? raw.migrations : {}) };
+  if (!s.migrations.trophyResetV1) {
+    s.workspaces = s.workspaces.map((w) => ({ ...w, trophies: {} }));
+    s.migrations.trophyResetV1 = true;
+    needsFlush = true;
+  }
   return s;
 }
 
 let current = null;
+let needsFlush = false;
 let writeTimer = null;
 
 function get() {
-  if (!current) current = load();
+  if (!current) {
+    current = load();
+    // Persist a migration at once so a crash cannot re-run it after new trophies are earned.
+    if (needsFlush) {
+      needsFlush = false;
+      flushSync();
+    }
+  }
   return current;
 }
 
@@ -140,6 +160,15 @@ function updateWorkspace(id, patch) {
   return set({ workspaces: s.workspaces.map((w) => (w.id === id ? { ...w, ...patch } : w)) });
 }
 
+// A map boss fell: count it on the workspace's trophy shelf ({ "boss:forest": { count, firstAt } }).
+function addTrophy(id, bossId) {
+  const ws = get().workspaces.find((w) => w.id === id);
+  if (!ws) return get();
+  const old = ws.trophies?.[bossId];
+  const trophies = { ...ws.trophies, [bossId]: { count: Math.min((old?.count || 0) + 1, 9999), firstAt: old?.firstAt || Date.now() } };
+  return updateWorkspace(id, { trophies });
+}
+
 function addMessage(wsId, message) {
   const s = get();
   const ws = s.workspaces.find((w) => w.id === wsId);
@@ -182,8 +211,20 @@ function addUsage(id, u) {
 }
 
 // Summon a different random hero for a workspace. Progress stays.
+// A summoned name that was designed before gets its saved design back; any other seed clears the look.
 function rerollHero(id, seed) {
-  return updateWorkspace(id, { heroSeed: seed || crypto.randomUUID() });
+  const name = typeof seed === 'string' && seed.startsWith('summon:') ? seed.slice('summon:'.length) : null;
+  const heroDesign = name ? designFor(get().summonDesigns, name) : null;
+  return updateWorkspace(id, { heroSeed: seed || crypto.randomUUID(), heroDesign });
+}
+
+// Store a design main has validated: remembered by name, and worn by the workspace if it still wears that name.
+function applyDesign(id, name, design) {
+  const stored = rememberDesign(get().summonDesigns, name, design);
+  set({ summonDesigns: stored });
+  const ws = get().workspaces.find((w) => w.id === id);
+  if (ws && ws.heroSeed === `summon:${name}`) updateWorkspace(id, { heroDesign: stored[name] });
+  return get();
 }
 
 function updateAgent(wsId, agentId, patch) {
@@ -211,6 +252,6 @@ function removeAgent(wsId, agentId) {
 }
 
 module.exports = {
-  get, set, active, updateWorkspace, addUsage, importWorkspace, selectWorkspace, removeWorkspace, rerollHero,
+  get, set, active, updateWorkspace, addTrophy, addUsage, importWorkspace, selectWorkspace, removeWorkspace, rerollHero, applyDesign,
   newAgent, updateAgent, addAgent, removeAgent, addMessage, flushSync,
 };

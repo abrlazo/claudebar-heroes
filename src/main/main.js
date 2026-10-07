@@ -8,6 +8,7 @@ const claude = require('./claude');
 const agents = require('./agents');
 const agentDefinitions = require('./agent-definitions');
 const commandCatalog = require('./command-catalog');
+const heroDesign = require('./hero-design');
 
 // The window is a transparent, frameless box that holds the hero strip. It
 // can be dragged anywhere (even over the taskbar) and remembers its spot.
@@ -177,7 +178,13 @@ function togglePanel() {
 
 function registerIpc() {
   ipcMain.handle('settings:get', () => settings.get());
-  ipcMain.handle('settings:set', (_e, patch) => settings.set(patch));
+  // The renderer never writes workspaces (hero seed and design) or saved designs through here:
+  // those change only through the validated handlers below.
+  ipcMain.handle('settings:set', (_e, patch) => {
+    if (!patch || typeof patch !== 'object') return settings.get();
+    const { workspaces, summonDesigns, migrations, ...rest } = patch;
+    return settings.set(rest);
+  });
 
   // ----- workspaces: each imported project gets its own random hero -----
 
@@ -206,8 +213,44 @@ function registerIpc() {
   // A summoned character is accepted only with a well-formed seed (Vader's legacy seed, or
   // "summon:<name>" with a short plain name); anything else gets a random hero.
   // Keep in sync with findSummon in src/renderer/engine/heroes.js.
-  const isSummonSeed = (seed) => seed === 'secret:darth-vader' || (typeof seed === 'string' && /^summon:[a-z0-9][a-z0-9 '.-]{0,39}$/.test(seed));
+  const SUMMON_NAME_RE = /^[a-z0-9][a-z0-9 '.-]{0,39}$/;
+  const isSummonName = (name) => typeof name === 'string' && SUMMON_NAME_RE.test(name);
+  const isSummonSeed = (seed) => seed === 'secret:darth-vader' || (typeof seed === 'string' && seed.startsWith('summon:') && isSummonName(seed.slice(7)));
+  // The renderer sends only a seed. A saved design is attached by settings.rerollHero from what main validated earlier.
   ipcMain.handle('workspace:reroll', (_e, id, seed) => settings.rerollHero(id, isSummonSeed(seed) ? seed : undefined));
+
+  // Ask Claude (no tools, cheap model, neutral folder, short timeout) to design the look of a summoned name.
+  // The answer is validated here (hero-design.js) and only then saved; the renderer can't supply a design.
+  const designing = new Set();
+  ipcMain.handle('summon:design', async (_e, wsId, name) => {
+    if (typeof wsId !== 'string' || !isSummonName(name)) return { ok: false, reason: 'invalid request' };
+    const exists = () => settings.get().workspaces.some((w) => w.id === wsId);
+    if (!exists()) return { ok: false, reason: 'invalid request' };
+    if (heroDesign.designFor(settings.get().summonDesigns, name)) {
+      return { ok: true, cached: true, settings: settings.applyDesign(wsId, name, heroDesign.designFor(settings.get().summonDesigns, name)) };
+    }
+    if (designing.has(name)) return { ok: false, reason: 'busy' };
+    designing.add(name);
+    try {
+      const cwd = path.join(app.getPath('userData'), 'summon-cwd');
+      fs.mkdirSync(cwd, { recursive: true });
+      const timeoutMs = Number(process.env.HERO_DESIGN_TIMEOUT_MS) || 25000;
+      const answer = await claude.ask({ prompt: heroDesign.designPrompt(name), cwd, model: 'haiku', timeoutMs });
+      if (!answer.ok) return { ok: false, reason: answer.error === 'not-found' ? 'Claude not found' : answer.error === 'timeout' ? 'timeout' : 'Claude failed' };
+      const checked = heroDesign.validateDesign(heroDesign.parseDesignText(answer.text));
+      if (!checked.ok) return { ok: false, reason: checked.reason };
+      return { ok: true, settings: settings.applyDesign(wsId, name, checked.design) };
+    } catch {
+      return { ok: false, reason: 'Claude failed' };
+    } finally {
+      designing.delete(name);
+    }
+  });
+  // Keep in sync with BOSSES in src/renderer/engine/enemies.js.
+  const isBossId = (id) => typeof id === 'string' && /^boss:(forest|desert|snowy|lava|night)$/.test(id);
+  ipcMain.handle('workspace:trophy', (_e, id, bossId) => (
+    typeof id === 'string' && isBossId(bossId) ? settings.addTrophy(id, bossId) : settings.get()
+  ));
   ipcMain.handle('workspace:update', (_e, id, patch) => {
     const { kills, map } = patch; // the renderer may only touch map progress
     return settings.updateWorkspace(id, Object.fromEntries(
