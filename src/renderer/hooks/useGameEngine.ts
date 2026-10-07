@@ -7,6 +7,7 @@ import type { Hero, MapId } from '../types';
 export interface GameHooks {
   onKill?: (kills: number) => void;
   onMapChange?: (mapId: MapId, kills: number) => void;
+  onBossDefeated?: (bossId: string) => void;
   say?: (text: string, ms?: number) => void;
 }
 
@@ -64,6 +65,7 @@ export function useGameEngine(hooks: GameHooks): { game: GameApi; refs: StageRef
       {
         onKill: (kills: number) => hooksRef.current.onKill?.(kills),
         onMapChange: (mapId: string, kills: number) => hooksRef.current.onMapChange?.(mapId as MapId, kills),
+        onBossDefeated: (bossId: string) => hooksRef.current.onBossDefeated?.(bossId),
         say: (text: string, ms?: number) => hooksRef.current.say?.(text, ms),
       },
     );

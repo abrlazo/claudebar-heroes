@@ -6,15 +6,24 @@
 import { BACKGROUNDS } from './heroes.js';
 import { createScene } from './scene.js';
 import { createSprite } from './sprite.js';
-import { ENEMY_TYPES, createMonster } from './enemies.js';
+import { ENEMY_TYPES, BOSSES, createMonster } from './enemies.js';
 import { prestigeFor } from './prestige.js';
 import { createAura } from './aura.js';
+import { rollBoss, stageKey } from './boss.js';
 
 const HERO_X = 40;            // hero's fixed screen position
 const HERO_REACH = 46;        // how far in front of HERO_X the hero can hit
 export const KILLS_PER_MAP = 8;
 const SCENE_PX = 2;           // screen pixels per scene-canvas pixel (see scene.js)
 const MAX_QUEUED = 5;         // cap on tool-call enemies waiting to spawn
+
+// Kill combo: kills within COMBO_MS of each other stack, each step adds COMBO_STEP damage (up to COMBO_MAX steps).
+const COMBO_MS = 6000;
+const COMBO_STEP = 0.05;
+const COMBO_MAX = 5;
+const CRIT_MULT = 2;
+const critChance = (spd) => Math.max(0.08, Math.min(0.3, 0.08 + spd / 1000));
+const BOSS_ATK_MULT = 2;      // a boss hits the hero twice as hard (the swing is only visual)
 
 /**
  * Creates the battle engine. React owns the elements; the engine only draws
@@ -24,6 +33,7 @@ const MAX_QUEUED = 5;         // cap on tool-call enemies waiting to spawn
  *          heroCanvas: HTMLCanvasElement, auraCanvas: HTMLCanvasElement, fadeEl: HTMLElement}} els
  * @param {{onKill?: (kills: number) => void,
  *          onMapChange?: (mapId: string, kills: number) => void,
+ *          onBossDefeated?: (bossId: string) => void,
  *          say?: (text: string, ms?: number) => void}} hooks
  */
 export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas, fadeEl: fade }, hooks) {
@@ -40,7 +50,23 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
     lastTime: performance.now(),
     allies: [],      // minions fighting alongside hero
     projectiles: [], // magic balls, arrows, etc
+    combo: 0,
+    comboLeft: 0,
+    bossRoll: null,  // { key, boss }: this stage's boss roll (not persisted)
   };
+  // Damage already dealt to the boss of a map (fraction of its HP left), so a boss
+  // interrupted by sleep() comes back wounded instead of at full health.
+  const bossHpFrac = {};
+
+  // Kill combo label (top-right of the stage); text changes only when the combo does.
+  const comboEl = document.createElement('div');
+  comboEl.className = 'combo';
+  stage.appendChild(comboEl);
+  function setCombo(n, ms = 0) {
+    state.combo = n;
+    state.comboLeft = ms;
+    comboEl.textContent = n >= 2 ? `x${n} COMBO` : '';
+  }
 
   const scene = createScene(sceneCanvas);
   const resizeObserver = new ResizeObserver(() => scene.resize());
@@ -92,15 +118,17 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
 
   // ----- Enemies -----
 
-  function spawnEnemy(label) {
+  // `bossLook` (from BOSSES) spawns the map boss instead of a tool-call monster.
+  function spawnEnemy(label, bossLook) {
     const types = ENEMY_TYPES[state.mapId] || ENEMY_TYPES.forest;
-    const enemyData = types[Math.floor(Math.random() * types.length)];
+    const enemyData = bossLook || types[Math.floor(Math.random() * types.length)];
     const loops = Math.floor(state.kills / KILLS_PER_MAP);
     const baseHp = 250 + mapIndex() * 60 + loops * 40;
     const maxHp = Math.round(baseHp * enemyData.hp);
+    if (bossLook) label = bossLook.name;
 
     const el = document.createElement('div');
-    el.className = 'enemy';
+    el.className = bossLook ? 'enemy boss' : 'enemy';
 
     const canvas = document.createElement('canvas');
     const monster = createMonster(canvas, enemyData);
@@ -122,7 +150,11 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
     }
     stage.appendChild(el);
 
-    const enemy = { el, x: stage.clientWidth + 10, hp: maxHp, maxHp, monster, atk: 6 + mapIndex() * 2 + loops, hpFill };
+    const enemy = {
+      el, x: stage.clientWidth + 10, hp: maxHp, maxHp, monster, hpFill, look: enemyData, boss: !!bossLook,
+      atk: (6 + mapIndex() * 2 + loops) * (bossLook ? BOSS_ATK_MULT : 1),
+    };
+    if (bossLook) enemy.hp = Math.max(1, Math.round(maxHp * (bossHpFrac[state.mapId] ?? 1)));
     state.enemies.push(enemy);
     place(enemy);
   }
@@ -203,6 +235,26 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
     later(() => el.remove(), 900);
   }
 
+  // Applies the kill combo and a possible critical hit to a base damage.
+  function rollDamage(base) {
+    const crit = Math.random() < critChance(state.hero.stats.spd);
+    const mult = (1 + Math.min(state.combo, COMBO_MAX) * COMBO_STEP) * (crit ? CRIT_MULT : 1);
+    return { dmg: Math.round(base * mult), crit };
+  }
+
+  function showHit(enemy, dmg, crit, x) {
+    enemy.el.classList.add('hit');
+    later(() => enemy.el.classList.remove('hit'), 120);
+    if (crit) {
+      enemy.el.classList.add('crit-hit');
+      later(() => enemy.el.classList.remove('crit-hit'), 150);
+    }
+    floatText(crit ? `${dmg}!` : String(dmg), x, crit ? 'crit' : '');
+    if (enemy.boss) bossHpFrac[state.mapId] = enemy.hp / enemy.maxHp;
+    place(enemy);
+    if (enemy.hp === 0) kill(enemy);
+  }
+
   function hit(enemy) {
     let dmg = Math.round(state.hero.stats.atk * (0.8 + Math.random() * 0.4));
 
@@ -213,23 +265,16 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
       }
     }
 
-    enemy.hp = Math.max(0, enemy.hp - dmg);
+    const rolled = rollDamage(dmg);
+    enemy.hp = Math.max(0, enemy.hp - rolled.dmg);
     setPose('attack');
-    enemy.el.classList.add('hit');
-    later(() => enemy.el.classList.remove('hit'), 120);
-    floatText(String(dmg), enemy.x + 4);
-    place(enemy);
-    if (enemy.hp === 0) kill(enemy);
+    showHit(enemy, rolled.dmg, rolled.crit, enemy.x + 4);
   }
 
   function hitProjectile(projectile, enemy) {
-    const dmg = projectile.damage + Math.floor(Math.random() * 10);
-    enemy.hp = Math.max(0, enemy.hp - dmg);
-    enemy.el.classList.add('hit');
-    later(() => enemy.el.classList.remove('hit'), 120);
-    floatText(String(dmg), projectile.x);
-    place(enemy);
-    if (enemy.hp === 0) kill(enemy);
+    const rolled = rollDamage(projectile.damage + Math.floor(Math.random() * 10));
+    enemy.hp = Math.max(0, enemy.hp - rolled.dmg);
+    showHit(enemy, rolled.dmg, rolled.crit, projectile.x);
   }
 
   function kill(enemy) {
@@ -237,8 +282,15 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
     enemy.el.classList.add('dying');
     later(() => enemy.el.remove(), 400);
     state.kills += 1;
+    setCombo(state.combo + 1, COMBO_MS);
     hooks.onKill?.(state.kills);
-    if (state.kills % KILLS_PER_MAP === 0) nextMap();
+    if (enemy.boss) {
+      delete bossHpFrac[state.mapId];
+      aura.burst();
+      hooks.say?.('Boss down!', 900);
+      hooks.onBossDefeated?.(enemy.look.id);
+    }
+    if (state.kills % KILLS_PER_MAP === 0) nextMap(enemy.boss);
   }
 
   function clearEnemies() {
@@ -251,11 +303,20 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
     state.projectiles = [];
   }
 
+  // The roll is kept per stage key, so sleep/wake and configure() with the same stage never re-roll.
+  function bossThisStage() {
+    const key = stageKey(state.mapId, state.kills, KILLS_PER_MAP);
+    if (!state.bossRoll || state.bossRoll.key !== key) state.bossRoll = { key, boss: rollBoss() };
+    return state.bossRoll.boss;
+  }
+
   // ----- Map progression -----
 
-  function nextMap() {
+  function nextMap(afterBoss = false) {
     state.transitioning = true;
-    hooks.say?.('Stage clear!', 1600);
+    state.bossRoll = null;
+    if (afterBoss) later(() => hooks.say?.('Stage clear!', 1600), 900);
+    else hooks.say?.('Stage clear!', 1600);
     setPose('victory');
     later(() => fade.classList.add('on'), 900);
     later(() => {
@@ -313,6 +374,10 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
 
   function step(dt) {
     state.attackCooldown -= dt;
+    if (state.combo > 0) {
+      state.comboLeft -= dt;
+      if (state.comboLeft <= 0) setCombo(0);
+    }
 
     // Update projectiles
     state.projectiles = state.projectiles.filter(p => {
@@ -363,8 +428,19 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
     const last = state.enemies[state.enemies.length - 1];
     const roomToSpawn = !last || last.x < stage.clientWidth - 90;
     if (state.nextSpawnIn <= 0 && roomToSpawn) {
-      spawnEnemy(state.queue.shift());
-      state.nextSpawnIn = state.queue.length ? 600 : 1500 + Math.random() * 2500;
+      // Bosses are rare: each stage rolls once (BOSS_CHANCE) when the line (kills so far + monsters
+      // alive) first reaches 7. On a hit only the boss spawns, so it is the stage-clearing kill and
+      // never buried in a queue. On a miss normal monsters keep spawning and the stage clears at 8 kills.
+      const inLine = (state.kills % KILLS_PER_MAP) + state.enemies.length;
+      if (inLine >= KILLS_PER_MAP - 1 && bossThisStage()) {
+        if (!state.enemies.some((e) => e.boss)) {
+          spawnEnemy(null, BOSSES[state.mapId] || BOSSES.forest);
+          state.nextSpawnIn = 1500;
+        }
+      } else {
+        spawnEnemy(state.queue.shift());
+        state.nextSpawnIn = state.queue.length ? 600 : 1500 + Math.random() * 2500;
+      }
     }
   }
 
@@ -379,6 +455,7 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
       timers.clear();
       for (const e of state.enemies) e.el.remove();
       state.enemies = [];
+      comboEl.remove();
     },
 
     configure({ hero, mapId, kills, allies, level }) {
@@ -414,6 +491,7 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
       state.awake = false;
       aura.setActive(false);
       clearEnemies();
+      setCombo(0);
       setPose('victory');
       later(() => { if (!state.awake) setPose('sleep'); }, 1600);
     },

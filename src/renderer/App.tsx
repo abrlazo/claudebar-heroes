@@ -14,6 +14,7 @@ import { useWindowDrag } from './hooks/useWindowDrag';
 import { usePanelResize } from './hooks/usePanelResize';
 import { heroFor } from './lib/heroCache';
 import { findSummon } from './engine/heroes.js';
+import { BOSSES } from './engine/enemies.js';
 import { MAX_AGENTS, MAX_CHAIN_STEPS, parseAgentChain, parseAgentInvocation } from './lib/agents';
 import type { AgentInvocation } from './lib/agents';
 import { bar } from './lib/bridge';
@@ -33,7 +34,7 @@ import type { ClaudeEvent, MapId, ModelAlias } from './types';
 const PLAN_COMMAND = /^\s*\/plan(?:\s+([\s\S]*))?$/i;
 
 function AppShell() {
-  const { settings, getSettings, patchWorkspace, persistMessage, updateSettings } = useSettings();
+  const { settings, getSettings, patchWorkspace, addTrophy, persistMessage, updateSettings } = useSettings();
   const ws = useActiveWorkspace();
   const { status, setStatus, bubble, say } = useStageStatus();
   const busyRef = useRef(false);
@@ -48,6 +49,14 @@ function AppShell() {
     onMapChange: (map, kills) => {
       const id = getSettings().activeId;
       if (id) patchWorkspace(id, { map, kills });
+    },
+    onBossDefeated: (bossId) => {
+      const id = getSettings().activeId;
+      if (!id) return;
+      const first = !getSettings().workspaces.find((w) => w.id === id)?.trophies?.[bossId];
+      addTrophy(id, bossId);
+      const boss = Object.values(BOSSES).find((b) => b.id === bossId);
+      if (first && boss) say(`Trophy: ${boss.name}`, 1800);
     },
     say,
   });

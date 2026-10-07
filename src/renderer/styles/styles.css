@@ -169,6 +169,19 @@ button:hover { border-color: var(--purple); }
   image-rendering: pixelated;
 }
 .enemy.hit canvas { filter: brightness(2); }
+.enemy.crit-hit canvas { animation: crit-shake 0.15s; }
+@keyframes crit-shake {
+  0%, 100% { translate: 0 0; }
+  25% { translate: 3px -2px; }
+  75% { translate: -3px 1px; }
+}
+/* Map boss: bigger (CSS size, not transform: the engine positions by translateX), gold glow, wide HP bar. */
+.enemy.boss { z-index: 2; bottom: 4px; }
+.enemy.boss canvas { width: 66px; height: 60px; filter: drop-shadow(0 0 3px #ffd166); }
+.enemy.boss.hit canvas { filter: brightness(2) drop-shadow(0 0 3px #ffd166); }
+.enemy.boss .hp { width: 56px; height: 6px; border-color: #ffd166; }
+.enemy.boss .enemy-name { color: #ffd166; font-weight: bold; max-width: 110px; }
+.enemy.boss.dying { animation-duration: 0.8s; }
 .enemy.dying { animation: poof 0.4s forwards; }
 .enemy.fleeing { opacity: 0; }
 @keyframes poof { to { opacity: 0; scale: 1.6; filter: brightness(3); } }
@@ -440,6 +453,19 @@ body.theme-light #workspace, body.theme-light #permission-mode, body.theme-light
 button.danger:hover { border-color: #ff6b6b; color: #ff9b9b; }
 textarea:disabled { opacity: 0.5; }
 
+.damage.crit { color: #ff9f1c; font-size: 15px; }
+.combo {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  z-index: 4;
+  font-weight: bold;
+  font-size: 12px;
+  color: #ff9f1c;
+  text-shadow: 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;
+  pointer-events: none;
+}
+.combo:empty { display: none; }
 .damage.xp { color: #b8a6ff; font-size: 11px; }
 .hero-card-wrap { position: relative; }
 .hero-card .tokens { color: var(--muted); font-size: 10px; }
@@ -635,3 +661,26 @@ body.theme-light .command-kind.kind-app { color: #be185d; border-color: #be185d;
 body.theme-light .command-item.active .command-kind { color: #fff; border-color: rgba(255, 255, 255, 0.7); }
 body.theme-light .command-desc, body.theme-light .command-hint { color: #4b4b5a; }
 body.theme-light .command-item.active .command-hint, body.theme-light .command-item.active .command-desc { color: rgba(255, 255, 255, 0.9); }
+
+/* ---------- Boss trophies (Status tab) ---------- */
+#trophies { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.trophy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 92px;
+  padding: 4px;
+  font-size: 10px;
+  border: 1px solid #ffd166;
+  border-radius: 6px;
+  background: var(--ink-2);
+}
+.trophy canvas { width: 66px; height: 60px; image-rendering: pixelated; }
+.trophy-name { text-align: center; line-height: 1.2; }
+.trophy-count { color: #ffd166; font-weight: bold; }
+body.theme-light .trophy-count { color: #a06a00; }
+.trophy-hint { margin: 0 0 8px; font-size: 10px; color: var(--muted); }
+.trophy.locked { border-color: transparent; }
+.trophy.locked canvas { filter: brightness(0); opacity: 0.35; }
+body.theme-light .trophy.locked canvas { opacity: 0.25; }
+.trophy.locked .trophy-name { color: var(--muted); }

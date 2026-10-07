@@ -3,6 +3,7 @@ import { bar } from '../../../lib/bridge';
 import { Roster } from './Roster';
 import { HeroDetail } from './HeroDetail';
 import { MapPicker } from './MapPicker';
+import { Trophies } from './Trophies';
 import { SettingsControls } from './SettingsControls';
 import { useSettings } from '../../../context/SettingsContext';
 import type { WorkspaceActions } from '../../../hooks/useWorkspaceActions';
@@ -26,6 +27,8 @@ export function Inventory({ visible, ws, busy, actions, onPickMap }: InventoryPr
       <h3>Your heroes</h3>
       <Roster workspaces={settings.workspaces} activeId={settings.activeId} busy={busy} actions={actions} />
       <HeroDetail ws={ws} busy={busy} actions={actions} />
+      <h3>Trophies</h3>
+      <Trophies ws={ws} />
       <h3>Current map</h3>
       <MapPicker ws={ws} onPick={onPickMap} />
       <h3>About</h3>

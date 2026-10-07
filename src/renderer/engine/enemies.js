@@ -10,7 +10,8 @@
 
 /**
  * @typedef {{kind: 'goblin'|'skeleton'|'orc'|'imp', name: string, skin: string,
- *            cloth: string, weapon: 'club'|'dagger'|'axe'|'sword', hp: number}} MonsterLook
+ *            cloth: string, weapon: 'club'|'dagger'|'axe'|'sword', hp: number,
+ *            id?: string, boss?: boolean}} MonsterLook
  */
 
 /** @type {Record<string, MonsterLook[]>} */
@@ -42,6 +43,21 @@ export const ENEMY_TYPES = {
     { kind: 'imp', name: 'Night Imp', skin: '#ffd23f', cloth: '#1a1a2e', weapon: 'club', hp: 0.9 },
     { kind: 'orc', name: 'Night Orc', skin: '#ff8a3d', cloth: '#1a1a2e', weapon: 'axe', hp: 1.6 },
   ],
+};
+
+/**
+ * One boss per map: the 8th (stage-clearing) fight. Same bodies as the normal
+ * monsters, drawn bigger and crowned (see createMonster and `.enemy.boss`).
+ * `hp` is a multiplier like in ENEMY_TYPES. Keep the ids in sync with
+ * `isBossId` in main/main.js.
+ * @type {Record<string, MonsterLook>}
+ */
+export const BOSSES = {
+  forest: { id: 'boss:forest', boss: true, kind: 'orc', name: 'Grukk, Orc King', skin: '#e0457b', cloth: '#3a1020', weapon: 'axe', hp: 5 },
+  desert: { id: 'boss:desert', boss: true, kind: 'skeleton', name: 'Khamun, Bone Pharaoh', skin: '#4fd1c5', cloth: '#1f1238', weapon: 'sword', hp: 5 },
+  snowy: { id: 'boss:snowy', boss: true, kind: 'orc', name: 'Rimefang, Ice Tyrant', skin: '#c0261d', cloth: '#1c2a44', weapon: 'club', hp: 5 },
+  lava: { id: 'boss:lava', boss: true, kind: 'imp', name: 'Pyrax, Cinder Lord', skin: '#2ec4ff', cloth: '#0a2a44', weapon: 'dagger', hp: 5 },
+  night: { id: 'boss:night', boss: true, kind: 'goblin', name: 'Nyx, Goblin Queen', skin: '#e6ff3a', cloth: '#2a1a3a', weapon: 'axe', hp: 5 },
 };
 
 // The figure is drawn in a 32x32 box inside a larger canvas so the raised
@@ -139,7 +155,7 @@ const BODIES = {
     rect('#b3001b', hx + 2, hy + 4, 1, 1);
     rect('#fff', hx + 3, hy + 6, 1, 1);
     rect('#fff', hx + 6, hy + 6, 1, 1);
-    return { x: 12 - lean, y: 17 - bob, w: 3 };
+    return { x: 12 - lean, y: 17 - bob, w: 3, head: { x: hx, y: hy, w: 10 } };
   },
 
   skeleton(p) {
@@ -177,7 +193,7 @@ const BODIES = {
     rect('#12101a', hx + 3, hy + 9 + jaw, 1, 1);               // teeth gaps
     rect('#12101a', hx + 5, hy + 9 + jaw, 1, 1);
     if (jaw) rect('#12101a', hx + 2, hy + 9, 6, jaw);          // open mouth
-    return { x: 12 - lean, y: 17 - bob, w: 2 };
+    return { x: 12 - lean, y: 17 - bob, w: 2, head: { x: hx, y: hy, w: 10 } };
   },
 
   orc(p) {
@@ -212,7 +228,7 @@ const BODIES = {
     rect('#fff', hx + 1, hy + 6, 2, 3);                        // tusks
     rect('#fff', hx + 6, hy + 6, 2, 3);
     rect(look.cloth, hx - 1, hy - 1, 12, 2);                   // headband
-    return { x: 11 - lean, y: 16 - bob, w: 4 };
+    return { x: 11 - lean, y: 16 - bob, w: 4, head: { x: hx, y: hy, w: 11 } };
   },
 
   imp(p) {
@@ -257,7 +273,7 @@ const BODIES = {
     rect('#1a0000', hx + 3, hy + 7, 5, 1);                      // grin
     rect('#fff', hx + 4, hy + 7, 1, 1);
     rect('#fff', hx + 6, hy + 7, 1, 1);
-    return { x: 11 - lean, y: 18 - bob, w: 2 };
+    return { x: 11 - lean, y: 18 - bob, w: 2, head: { x: hx, y: hy, w: 11 } };
   },
 };
 
@@ -303,6 +319,16 @@ export function createMonster(canvas, look) {
     rect(color, x, 29 - lift, width, 3);
   }
 
+  // Bosses wear a gold crown on top of the head.
+  function drawCrown(head) {
+    rect('#b8860b', head.x, head.y - 2, head.w, 2);
+    rect('#ffd166', head.x, head.y - 2, head.w, 1);
+    for (const dx of [0, Math.floor(head.w / 2) - 1, head.w - 2]) {
+      rect('#ffd166', head.x + dx, head.y - 5, 2, 3);
+    }
+    rect('#ff3b3b', head.x + Math.floor(head.w / 2) - 1, head.y - 2, 2, 1);
+  }
+
   function draw() {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, MONSTER_W, MONSTER_H);
@@ -317,6 +343,8 @@ export function createMonster(canvas, look) {
     const shoulder = drawBody({
       ctx, rect, arm, foot, walking, fighting, stride, bob, slam, lean, phase, look, skin, dark,
     });
+
+    if (look.boss) drawCrown(shoulder.head);
 
     // Weapon arm (front): carries the weapon, drives the attack.
     const carry = walking ? 1.0 + stride * 0.5 : 1.0 + Math.sin(phase * 0.5) * 0.1;
