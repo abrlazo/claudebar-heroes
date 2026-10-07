@@ -5,7 +5,7 @@ An Electron taskbar companion for [Claude Code](https://claude.com/claude-code) 
 - **One hero per project.** Every imported project gets its own hero, generated from a seed.
 - **Monsters for tool calls.** Each tool call Claude makes sends a monster at the hero.
 - **Levels from tokens used.** The hero levels up as Claude uses tokens in that project.
-- **Spirit orbs for agents.** Parallel agents appear as orbs next to the hero.
+- **Spirit orbs for agents.** Every agent you start appears as an orb next to the hero.
 - **Ask chat.** A project-less chat for quick questions.
 
 ## Requirements
@@ -27,7 +27,7 @@ npm start
 | `npm run watch` | Rebuilds the UI on every save (then use Status -> Restart App) |
 | `npm run build` | Bundles the UI into `dist/renderer` without launching |
 | `npm run typecheck` | Runs `tsc --noEmit` over `src/renderer` |
-| `npm run simulate` | Builds, then runs 3 simulated agents against a fake `claude` and checks the UI |
+| `npm run simulate` | Builds, then runs 3 simulated `/<agent>` invocations against a fake `claude` and checks the UI |
 
 Open the chat with the speech-bubble button on the strip or with `Cmd/Ctrl+Shift+Space`.
 
@@ -35,7 +35,8 @@ Open the chat with the speech-bubble button on the strip or with `Cmd/Ctrl+Shift
 
 - **Heroes and levels:** XP comes from tokens Claude uses in the project (cached context counts less); the HUD shows how full the context window is.
 - **Monsters:** one per tool call (goblins, skeletons, orcs, imps); every 8 kills clears a stage and moves to the next map.
-- **Agents:** parallel Claude processes (up to 3), each with its own orb, tab and chat.
+- **Agents:** type `/<agent-name> <task>` for any agent defined under `.claude/agents/` (for example `/gitama commit these changes`). It runs as its own Claude process (up to 4 at once) with its own orb, tab and chat. Skills, other slash commands and anything not in `.claude/agents/` are not agents and are sent to Claude as normal messages. Headless runs cannot ask for permission, so pick *Accept edits* or *Bypass perms* in the footer for agents that need tools like Bash.
+- **Command suggestions:** typing `/` in the Expedition chat opens a popup of everything you can run: your agents, Claude's own commands (built-ins such as `/compact` or `/context`, skills, custom commands) and the app's own `/plan` and `summon`. Type to narrow it, Up/Down to move, Enter or Tab to pick, Esc to close. Commands that only work in the terminal (`/help`, `/doctor`...) are left out. `/plan [task]` switches the footer to *Plan only* and sends the task.
 - **Ask chat:** an in-memory chat that is not tied to a project.
 - **Summoning:** type `summon <name>` in the project chat to turn the project's hero into that character (Darth Vader, Yoda, Gandalf, Goku, Batman and Link are hand-built).
 - **Prestige:** the weapon glows from level 10 and an aura appears from level 15.
