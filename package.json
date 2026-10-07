@@ -11,7 +11,7 @@
     "watch": "vite build --watch",
     "typecheck": "tsc --noEmit",
     "check": "node tools/check-roster.mjs && node tools/check-aura.mjs",
-    "simulate": "vite build && node tools/simulate-agents.mjs"
+    "simulate": "vite build && node tools/simulate-agents.mjs && node tools/check-aura-ui.mjs"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",
