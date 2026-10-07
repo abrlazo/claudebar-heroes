@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { bar } from '../lib/bridge';
 import { useSettings } from '../context/SettingsContext';
 import { heroFor } from '../lib/heroCache';
@@ -23,10 +23,13 @@ export interface SummonRequest {
   name: string;
   /** Catchphrase shown in the speech bubble (famous characters only). */
   quote?: string;
+  /** A hand-built character (no Claude call needed); other names get a look designed by Claude. */
+  famous?: boolean;
 }
 
 export function useWorkspaceActions({ busy, say }: { busy: boolean; say: (text: string, ms?: number) => void }): WorkspaceActions {
   const { settings, replace, persistMessage, getSettings } = useSettings();
+  const summoning = useRef<string | null>(null); // name whose design is being asked for
 
   const importProject = useCallback(async () => {
     if (busy) return;
@@ -83,14 +86,43 @@ export function useWorkspaceActions({ busy, say }: { busy: boolean; say: (text: 
       persistMessage(ws.id, { kind: 'meta', text: 'The summoning must wait until Claude has finished.' });
       return;
     }
-    if (ws.heroSeed === summon.seed) {
+    // A name that failed to get a look may be tried again.
+    if (ws.heroSeed === summon.seed && (summon.famous || ws.heroDesign)) {
       say(`${summon.name} is already here.`, 2500);
       persistMessage(ws.id, { kind: 'meta', text: `${summon.name} is already guarding ${ws.name}.` });
       return;
     }
-    replace(await bar.rerollHero(ws.id, summon.seed));
-    say(summon.quote ?? `${summon.name} has arrived!`, 3500);
-    persistMessage(ws.id, { kind: 'meta', text: `${summon.name} answers your call and now guards ${ws.name}.` });
+    if (summoning.current) {
+      persistMessage(ws.id, { kind: 'meta', text: `Still summoning ${summoning.current}. Try again in a moment.` });
+      return;
+    }
+    // Main attaches a saved design for this name, if there is one.
+    const rerolled = await bar.rerollHero(ws.id, summon.seed);
+    replace(rerolled);
+    if (summon.famous || rerolled.workspaces.find((w) => w.id === ws.id)?.heroDesign) {
+      say(summon.quote ?? `${summon.name} has arrived!`, 3500);
+      persistMessage(ws.id, { kind: 'meta', text: `${summon.name} answers your call and now guards ${ws.name}.` });
+      return;
+    }
+    // A new name: ask Claude to design the look (the generated hero stands in meanwhile; failures keep it).
+    summoning.current = summon.name;
+    say(`Summoning ${summon.name}...`, 20000);
+    persistMessage(ws.id, { kind: 'meta', text: `Summoning ${summon.name}... asking Claude to design the look.` });
+    let failure = 'Claude failed';
+    try {
+      const result = await bar.designSummon(ws.id, summon.seed.slice('summon:'.length));
+      if (result.ok) {
+        replace(result.settings);
+        say(`${summon.name} has arrived!`, 3500);
+        persistMessage(ws.id, { kind: 'meta', text: `${summon.name} answers your call (look designed by Claude, saved for next time).` });
+        return;
+      }
+      failure = result.reason;
+    } catch { /* keep the generated hero */ } finally {
+      summoning.current = null;
+    }
+    say(`${summon.name} has arrived!`, 3500);
+    persistMessage(ws.id, { kind: 'meta', text: `Could not design a look for ${summon.name} (${failure}); using a generated hero.` });
   }, [busy, persistMessage, replace, say]);
 
   return { importProject, selectProject, removeProject, rerollHero, newSession, summonHero };

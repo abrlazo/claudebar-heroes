@@ -6,6 +6,9 @@ const {
 const settings = require('./settings');
 const claude = require('./claude');
 const agents = require('./agents');
+const agentDefinitions = require('./agent-definitions');
+const commandCatalog = require('./command-catalog');
+const heroDesign = require('./hero-design');
 
 // The window is a transparent, frameless box that holds the hero strip. It
 // can be dragged anywhere (even over the taskbar) and remembers its spot.
@@ -18,6 +21,9 @@ const MARGIN = 8;
 
 // DevTools open on launch only for `npm run dev` (--dev); otherwise use the tray menu.
 const isDev = process.argv.includes('--dev');
+const PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions'];
+// A mode from the renderer only counts when it is on the list; otherwise the saved one applies.
+const safeMode = (mode) => (PERMISSION_MODES.includes(mode) ? mode : settings.get().permissionMode);
 const TOGGLE_SHORTCUT = 'CommandOrControl+Shift+Space';
 
 let win = null;
@@ -172,7 +178,13 @@ function togglePanel() {
 
 function registerIpc() {
   ipcMain.handle('settings:get', () => settings.get());
-  ipcMain.handle('settings:set', (_e, patch) => settings.set(patch));
+  // The renderer never writes workspaces (hero seed and design) or saved designs through here:
+  // those change only through the validated handlers below.
+  ipcMain.handle('settings:set', (_e, patch) => {
+    if (!patch || typeof patch !== 'object') return settings.get();
+    const { workspaces, summonDesigns, migrations, ...rest } = patch;
+    return settings.set(rest);
+  });
 
   // ----- workspaces: each imported project gets its own random hero -----
 
@@ -190,14 +202,55 @@ function registerIpc() {
 
   ipcMain.handle('workspace:select', (_e, id) => (mainHandle?.running ? settings.get() : settings.selectWorkspace(id)));
   // Any workspace can be removed, except the one Claude is working in right now.
+  const forgetWorkspace = (id) => {
+    const ws = settings.get().workspaces.find((w) => w.id === id);
+    if (ws) claudeCommandCache.delete(ws.path);
+    return settings.removeWorkspace(id);
+  };
   ipcMain.handle('workspace:remove', (_e, id) => (
-    mainHandle?.running && id === runningWsId ? settings.get() : settings.removeWorkspace(id)
+    mainHandle?.running && id === runningWsId ? settings.get() : forgetWorkspace(id)
   ));
   // A summoned character is accepted only with a well-formed seed (Vader's legacy seed, or
   // "summon:<name>" with a short plain name); anything else gets a random hero.
   // Keep in sync with findSummon in src/renderer/engine/heroes.js.
-  const isSummonSeed = (seed) => seed === 'secret:darth-vader' || (typeof seed === 'string' && /^summon:[a-z0-9][a-z0-9 '.-]{0,39}$/.test(seed));
+  const SUMMON_NAME_RE = /^[a-z0-9][a-z0-9 '.-]{0,39}$/;
+  const isSummonName = (name) => typeof name === 'string' && SUMMON_NAME_RE.test(name);
+  const isSummonSeed = (seed) => seed === 'secret:darth-vader' || (typeof seed === 'string' && seed.startsWith('summon:') && isSummonName(seed.slice(7)));
+  // The renderer sends only a seed. A saved design is attached by settings.rerollHero from what main validated earlier.
   ipcMain.handle('workspace:reroll', (_e, id, seed) => settings.rerollHero(id, isSummonSeed(seed) ? seed : undefined));
+
+  // Ask Claude (no tools, cheap model, neutral folder, short timeout) to design the look of a summoned name.
+  // The answer is validated here (hero-design.js) and only then saved; the renderer can't supply a design.
+  const designing = new Set();
+  ipcMain.handle('summon:design', async (_e, wsId, name) => {
+    if (typeof wsId !== 'string' || !isSummonName(name)) return { ok: false, reason: 'invalid request' };
+    const exists = () => settings.get().workspaces.some((w) => w.id === wsId);
+    if (!exists()) return { ok: false, reason: 'invalid request' };
+    if (heroDesign.designFor(settings.get().summonDesigns, name)) {
+      return { ok: true, cached: true, settings: settings.applyDesign(wsId, name, heroDesign.designFor(settings.get().summonDesigns, name)) };
+    }
+    if (designing.has(name)) return { ok: false, reason: 'busy' };
+    designing.add(name);
+    try {
+      const cwd = path.join(app.getPath('userData'), 'summon-cwd');
+      fs.mkdirSync(cwd, { recursive: true });
+      const timeoutMs = Number(process.env.HERO_DESIGN_TIMEOUT_MS) || 25000;
+      const answer = await claude.ask({ prompt: heroDesign.designPrompt(name), cwd, model: 'haiku', timeoutMs });
+      if (!answer.ok) return { ok: false, reason: answer.error === 'not-found' ? 'Claude not found' : answer.error === 'timeout' ? 'timeout' : 'Claude failed' };
+      const checked = heroDesign.validateDesign(heroDesign.parseDesignText(answer.text));
+      if (!checked.ok) return { ok: false, reason: checked.reason };
+      return { ok: true, settings: settings.applyDesign(wsId, name, checked.design) };
+    } catch {
+      return { ok: false, reason: 'Claude failed' };
+    } finally {
+      designing.delete(name);
+    }
+  });
+  // Keep in sync with BOSSES in src/renderer/engine/enemies.js.
+  const isBossId = (id) => typeof id === 'string' && /^boss:(forest|desert|snowy|lava|night)$/.test(id);
+  ipcMain.handle('workspace:trophy', (_e, id, bossId) => (
+    typeof id === 'string' && isBossId(bossId) ? settings.addTrophy(id, bossId) : settings.get()
+  ));
   ipcMain.handle('workspace:update', (_e, id, patch) => {
     const { kills, map } = patch; // the renderer may only touch map progress
     return settings.updateWorkspace(id, Object.fromEntries(
@@ -314,47 +367,93 @@ function registerIpc() {
   ipcMain.handle('claude:info', () => ({ bin: claude.resolveClaudeBinary() }));
 
   ipcMain.handle('settings:update', (_e, patch) => {
-    if (patch.panelHeight !== undefined) {
+    if (!patch || typeof patch !== 'object') return settings.get();
+    const allowed = {};
+    if (Number.isFinite(patch.panelHeight)) {
       panelHeight = Math.max(300, Math.min(1000, patch.panelHeight));
       applyBounds();
-      // Only persist panel height on explicit update, not every mousemove
-      if (patch.panelHeight) return settings.set({ panelHeight });
+      allowed.panelHeight = panelHeight;
     }
-    return settings.get();
+    // Other preferences the renderer may persist (the permission mode is read by every run).
+    if (PERMISSION_MODES.includes(patch.permissionMode)) allowed.permissionMode = patch.permissionMode;
+    if (patch.theme === 'dark' || patch.theme === 'light') allowed.theme = patch.theme;
+    return Object.keys(allowed).length ? settings.set(allowed) : settings.get();
   });
 
-  ipcMain.handle('agents:spawn', (_e, { wsId, count, prompt, cwd, permissionMode }) => {
+  // Everything that can follow a "/" in the chat (agents, skills, custom commands), for the suggestion popup.
+  // Claude's own command list is cached per project for a minute (and shared by concurrent callers)
+  // so the popup opens instantly; reading it spawns a short-lived `claude` (no model call).
+  const claudeCommandCache = new Map(); // project path -> { at, promise }
+  const claudeCommandsFor = (projectPath) => {
+    const hit = claudeCommandCache.get(projectPath);
+    if (hit && Date.now() - hit.at < 60000) return hit.promise;
+    const promise = claude.listCommands(projectPath);
+    claudeCommandCache.set(projectPath, { at: Date.now(), promise });
+    promise.then((list) => { if (!list) claudeCommandCache.delete(projectPath); });
+    return promise;
+  };
+  ipcMain.handle('commands:list', async (_e, wsId) => {
     const ws = settings.get().workspaces.find((w) => w.id === wsId);
-    if (!ws) return null;
-
-    const agentList = [];
-    for (let i = 0; i < count; i++) {
-      const agent = settings.newAgent(`Agent ${i + 1}`, i);
-      settings.addAgent(wsId, agent);
-      agentList.push(agent);
-
-      agents.spawn({
-        wsId,
-        agentId: agent.id,
-        agentName: agent.name,
-        prompt,
-        cwd,
-        permissionMode,
-      }, (event) => {
-        win?.webContents.send('agent:event', event);
-      });
-    }
-    return agentList;
+    if (!ws) return [];
+    return commandCatalog.listCatalog(ws.path, await claudeCommandsFor(ws.path));
   });
 
-  // Follow-up message to an existing agent: resume its Claude session.
-  ipcMain.on('agents:message', (_e, { wsId, agentId, sessionId, prompt, cwd, permissionMode }) => {
-    if (!prompt || !sessionId) return;
+  // The agents a project can invoke with "/<name>": markdown files under .claude/agents/.
+  ipcMain.handle('agents:definitions', (_e, wsId) => {
+    const ws = settings.get().workspaces.find((w) => w.id === wsId);
+    return ws ? agentDefinitions.listDefinitions(ws.path) : [];
+  });
+
+  // Chains: does the project hold the review agent's findings file? The path comes from the workspace.
+  ipcMain.handle('agents:hasReview', (_e, wsId) => {
+    const ws = settings.get().workspaces.find((w) => w.id === wsId);
+    if (!ws || typeof ws.path !== 'string') return false;
+    try { return fs.statSync(path.join(ws.path, '.claude', 'review.md')).isFile(); } catch { return false; }
+  });
+
+  // "/<agent> <task>": runs ONE agent in its own process (its own tab and orb in the UI).
+  // The name must match a definition under .claude/agents/; anything else is refused.
+  ipcMain.handle('agents:run', (_e, { wsId, definitionName, displayName, task, permissionMode }) => {
+    const ws = settings.get().workspaces.find((w) => w.id === wsId);
+    if (!ws) return { error: 'Project not found.' };
+    if (!task || typeof task !== 'string') return { error: 'Tell the agent what to do.' };
+    if (!fs.existsSync(ws.path)) return { error: `Project folder not found: ${ws.path}` };
+    const definition = agentDefinitions.findDefinition(ws.path, definitionName);
+    if (!definition) return { error: `No agent named "${definitionName}" in .claude/agents.` };
+    const name = typeof displayName === 'string' && displayName.trim() ? displayName.trim().slice(0, 40) : definition.name;
+
+    const agent = settings.newAgent(name, 0);
+    settings.addAgent(wsId, agent);
     agents.spawn({
-      wsId, agentId, agentName: 'Agent', prompt, cwd, permissionMode, sessionId,
+      wsId,
+      agentId: agent.id,
+      agentName: agent.name,
+      definitionName: definition.name,
+      prompt: task,
+      cwd: ws.path,
+      permissionMode: safeMode(permissionMode),
     }, (event) => {
       win?.webContents.send('agent:event', event);
     });
+    return { agent, definitionName: definition.name };
+  });
+
+  // Follow-up message to an existing agent: resume its Claude session, as the same agent.
+  ipcMain.on('agents:message', (_e, { wsId, agentId, sessionId, definitionName, prompt, permissionMode } = {}) => {
+    if (!prompt || typeof sessionId !== 'string' || !sessionId) return;
+    const ws = settings.get().workspaces.find((w) => w.id === wsId);
+    if (!ws) return;
+    const emit = (event) => win?.webContents.send('agent:event', event);
+    const definition = definitionName ? agentDefinitions.findDefinition(ws.path, definitionName) : null;
+    if (definitionName && !definition) {
+      // The file was deleted or renamed: don't silently resume as a plain run under the agent's name.
+      emit({ agentId, type: 'error', message: `Agent definition "${definitionName}" is gone from .claude/agents.` });
+      return;
+    }
+    agents.spawn({
+      wsId, agentId, agentName: 'Agent', definitionName: definition?.name ?? null, prompt, cwd: ws.path,
+      permissionMode: safeMode(permissionMode), sessionId,
+    }, emit);
   });
 
   ipcMain.handle('agents:cancel', (_e, { wsId, agentId }) => {

@@ -2,6 +2,7 @@ import { AgentTabs } from './AgentTabs';
 import { MessageLog } from '../common/MessageLog';
 import { Composer } from '../common/Composer';
 import { ModelSelect } from '../common/ModelSelect';
+import { useCommandCatalog } from '../../hooks/useCommandCatalog';
 import { useSettings } from '../../context/SettingsContext';
 import type { AgentsApi } from '../../hooks/useAgents';
 import type { ClaudeRun } from '../../hooks/useClaudeRun';
@@ -39,6 +40,7 @@ export function ProjectChat({
   visible, ws, run, agents, busy, projectBusy, model, onModelChange, onSend, onStop, workspaceActions,
 }: ProjectChatProps & { visible: boolean }) {
   const { settings, updateSettings } = useSettings();
+  const { suggestions, refresh: refreshCommands } = useCommandCatalog(ws?.id ?? null);
   const agent = agents.agents.find((a) => a.id === agents.selectedId);
   const messages = agent ? agent.log : ws?.messages || [];
   const showsRun = !agent && !!ws && run.streaming.wsId === ws.id;
@@ -65,10 +67,14 @@ export function ProjectChat({
       <Composer
         focused={visible}
         busy={agent ? agent.status === 'running' : (projectBusy ?? busy)}
-        disabled={!ws}
+        disabled={!ws || !!agent?.observed}
         onSend={onSend}
-        onStop={agent && ws ? () => agents.stop(ws.id, agent.id) : onStop}
-        placeholder={agent
+        suggestions={suggestions}
+        onSuggestionsOpen={refreshCommands}
+        onStop={agent && !agent.observed && ws ? () => agents.stop(ws.id, agent.id) : onStop}
+        placeholder={agent?.observed
+          ? "Claude is running this agent; it can't be messaged. Stop ends the whole run."
+          : agent
           ? `Message ${agent.name}… (Enter to send, Shift+Enter for a new line)`
           : ws
             ? `Ask Claude about ${ws.name}… (Enter to send, Shift+Enter for a new line)`

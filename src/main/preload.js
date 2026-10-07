@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('bar', {
   selectWorkspace: (id) => ipcRenderer.invoke('workspace:select', id),
   removeWorkspace: (id) => ipcRenderer.invoke('workspace:remove', id),
   rerollHero: (id, seed) => ipcRenderer.invoke('workspace:reroll', id, seed),
+  designSummon: (wsId, name) => ipcRenderer.invoke('summon:design', wsId, name),
+  addTrophy: (id, bossId) => ipcRenderer.invoke('workspace:trophy', id, bossId),
   updateWorkspace: (id, patch) => ipcRenderer.invoke('workspace:update', id, patch),
 
   setClickThrough: (ignore) => ipcRenderer.send('window:clickThrough', ignore),
@@ -35,8 +37,11 @@ contextBridge.exposeInMainWorld('bar', {
   sendGeneralChat: (prompt, model) => ipcRenderer.send('general-chat:send', { prompt, model }),
   cancelGeneralChat: () => ipcRenderer.send('general-chat:cancel'),
 
-  spawnAgents: (wsId, count, prompt, cwd, permissionMode) => ipcRenderer.invoke('agents:spawn', { wsId, count, prompt, cwd, permissionMode }),
-  messageAgent: (wsId, agentId, sessionId, prompt, cwd, permissionMode) => ipcRenderer.send('agents:message', { wsId, agentId, sessionId, prompt, cwd, permissionMode }),
+  commandCatalog: (wsId) => ipcRenderer.invoke('commands:list', wsId),
+  agentDefinitions: (wsId) => ipcRenderer.invoke('agents:definitions', wsId),
+  runAgent: (wsId, definitionName, displayName, task, permissionMode) => ipcRenderer.invoke('agents:run', { wsId, definitionName, displayName, task, permissionMode }),
+  messageAgent: (wsId, agentId, sessionId, definitionName, prompt, cwd, permissionMode) => ipcRenderer.send('agents:message', { wsId, agentId, sessionId, definitionName, prompt, cwd, permissionMode }),
+  projectHasReview: (wsId) => ipcRenderer.invoke('agents:hasReview', wsId),
   cancelAgent: (wsId, agentId) => ipcRenderer.invoke('agents:cancel', { wsId, agentId }),
   listAgents: (wsId) => ipcRenderer.invoke('agents:list', wsId),
 

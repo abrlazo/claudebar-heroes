@@ -40,6 +40,8 @@ export interface ClaudeRun {
   liveUsage: Usage | null;
   send: (wsId: string, prompt: string, model: ModelAlias) => void;
   stop: () => void;
+  /** Handles an inner event of a delegation that is not a shown agent as an ordinary tool line or text. */
+  replay: (ev: ClaudeEvent) => void;
 }
 
 interface Deps {
@@ -49,6 +51,9 @@ interface Deps {
   stageRef: RefObject<HTMLDivElement | null>;
   /** true while Claude OR agents work */
   busyRef: RefObject<boolean>;
+  /** Claude's delegations to the project's agents (see `useAgents`). `observe` returns false for other agents. */
+  observe: (ev: ClaudeEvent) => boolean;
+  endObserved: (wsId: string, cancelled: boolean) => void;
 }
 
 /**
@@ -60,7 +65,7 @@ interface Deps {
  * order matches what was shown. `liveUsage` counts tokens as the run goes:
  * finished model calls plus the input already known for the call in flight.
  */
-export function useClaudeRun({ game, say, setStatus, stageRef, busyRef }: Deps): ClaudeRun {
+export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe, endObserved }: Deps): ClaudeRun {
   const { getSettings, persistMessage, patchWorkspaceLocal } = useSettings();
   const [running, setRunning] = useState(false);
   const [activeRunWsId, setActiveRunWsId] = useState<string | null>(null);
@@ -99,7 +104,7 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef }: Deps):
     if (levelFor(after) > levelFor(before)) say(`Level up! Lv ${levelFor(after)}`, 3500);
   }, [getSettings, patchWorkspaceLocal, say, stageRef]);
 
-  useBridgeEvent<ClaudeEvent>(bar.onClaudeEvent, (ev) => {
+  const handle = (ev: ClaudeEvent) => {
     switch (ev.type) {
       case 'start':
         runWsId.current = ev.wsId || getSettings().activeId;
@@ -154,6 +159,15 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef }: Deps):
         setStatus(`⚔ ${ev.name}${ev.summary ? `: ${ev.summary}` : ''}`);
         break;
 
+      case 'subagent':
+        // Claude delegated to an agent: a known one gets its own tab, others stay ordinary tool lines.
+        if (ev.phase === 'event') {
+          if (!observe({ ...ev, wsId: ev.wsId || runWsId.current || undefined })) replay(ev);
+        } else {
+          observe({ ...ev, wsId: ev.wsId || runWsId.current || undefined });
+        }
+        break;
+
       case 'result':
         flush();
         if (ev.isError) {
@@ -184,6 +198,8 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef }: Deps):
 
       case 'end':
         flush();
+        // A run that ended with an error or was stopped cancels the agents it had delegated to.
+        if (runWsId.current) endObserved(runWsId.current, ev.code !== 0);
         runWsId.current = null;
         setActiveRunWsId(null);
         setLiveUsage(null);
@@ -194,7 +210,16 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef }: Deps):
       default:
         break;
     }
-  });
+  };
+
+  const handleRef = useRef(handle);
+  handleRef.current = handle;
+  /** What a subagent's inner event looks like when it is not shown as an agent: the same tool line or text as before. */
+  const replay = useCallback((ev: ClaudeEvent) => {
+    if (ev.phase === 'event' && ev.inner) handleRef.current({ ...ev, type: ev.inner });
+  }, []);
+
+  useBridgeEvent<ClaudeEvent>(bar.onClaudeEvent, handle);
 
   /** Save the user's prompt and start a run in the active workspace. */
   const send = useCallback((wsId: string, prompt: string, model: ModelAlias) => {
@@ -202,5 +227,5 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef }: Deps):
     bar.send(prompt, model);
   }, [persistMessage]);
 
-  return { running, runWsId: activeRunWsId, streaming, liveUsage, send, stop: () => bar.cancel() };
+  return { running, runWsId: activeRunWsId, streaming, liveUsage, send, stop: () => bar.cancel(), replay };
 }
