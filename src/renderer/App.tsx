@@ -14,13 +14,13 @@ import { useWindowDrag } from './hooks/useWindowDrag';
 import { usePanelResize } from './hooks/usePanelResize';
 import { heroFor } from './lib/heroCache';
 import { findSummon } from './engine/heroes.js';
-import { MAX_AGENTS, parseAgentInvocation } from './lib/agents';
+import { MAX_AGENTS, MAX_CHAIN_STEPS, parseAgentChain, parseAgentInvocation } from './lib/agents';
 import type { AgentInvocation } from './lib/agents';
 import { bar } from './lib/bridge';
 import type { Workspace } from './types';
 import { levelFor, xpFor } from './lib/leveling';
 import { DEFAULT_ASK_MODEL, DEFAULT_PROJECT_MODEL } from './lib/models';
-import type { MapId, ModelAlias } from './types';
+import type { ClaudeEvent, MapId, ModelAlias } from './types';
 
 /**
  * Composition root. Wires the hooks together; owns no UI of its own.
@@ -51,8 +51,18 @@ function AppShell() {
     },
     say,
   });
-  const run = useClaudeRun({ game, say, setStatus, stageRef: refs.stageRef, busyRef });
-  const agents = useAgents({ game, say });
+  // An inner event of a delegation that is not a shown agent goes back to the run as an ordinary event.
+  const replayRef = useRef<(ev: ClaudeEvent) => void>(() => {});
+  const agents = useAgents({
+    game, say,
+    notify: (id, text) => persistMessage(id, { kind: 'meta', text }),
+    onUnclaimed: (ev) => replayRef.current(ev),
+  });
+  const run = useClaudeRun({
+    game, say, setStatus, stageRef: refs.stageRef, busyRef,
+    observe: agents.observe, endObserved: agents.endObserved,
+  });
+  replayRef.current = run.replay;
   const ask = useGeneralChat();
   const panel = usePanel();
 
@@ -99,7 +109,11 @@ function AppShell() {
   const agentCount = agents.agents.filter((a) => a.status === 'running').length;
   const wasAgentsRunning = useRef(false);
   useEffect(() => {
-    if (run.running) return undefined;
+    if (run.running) {
+      // Agents Claude delegated to run inside the Expedition run: show their count when it changes.
+      if (agentCount > 0) setStatus(`⚔ ${agentCount} agent${agentCount > 1 ? 's' : ''} working…`);
+      return undefined;
+    }
     if (agents.running) {
       wasAgentsRunning.current = true;
       setStatus(agentCount > 0 ? `⚔ ${agentCount} agent${agentCount > 1 ? 's' : ''} working…` : 'Spawning agents…');
@@ -121,9 +135,9 @@ function AppShell() {
 
   // "/<agent-name> <task>" runs that agent in its own tab and orb. Only names found under
   // .claude/agents count; skills, other slash commands and plain text are not agents.
-  const startAgent = async (target: Workspace, { definition, task }: AgentInvocation, text: string) => {
+  const startAgent = async (target: Workspace, { definition, task }: AgentInvocation, text: string, rest: AgentInvocation[] = []) => {
     persistMessage(target.id, { kind: 'user', text });
-    if (agents.agents.filter((a) => a.status === 'running').length >= MAX_AGENTS) {
+    if (agents.agents.filter((a) => a.status === 'running' && !a.observed).length >= MAX_AGENTS) {
       persistMessage(target.id, { kind: 'meta', text: `${MAX_AGENTS} agents are already working. Wait for one to finish, or stop it.` });
       return;
     }
@@ -133,8 +147,10 @@ function AppShell() {
     }
     say(`Summoning ${definition.name}…`, 2000);
     try {
-      await agents.spawn(target, definition, task, settings.permissionMode);
-      persistMessage(target.id, { kind: 'meta', text: `${definition.name} is working in its own tab.` });
+      await agents.spawn(target, definition, task, settings.permissionMode, rest.length ? { rest, total: rest.length + 1 } : undefined);
+      persistMessage(target.id, { kind: 'meta', text: rest.length
+        ? `Chain: ${[definition, ...rest.map((s) => s.definition)].map((d) => d.name).join(' -> ')}. ${definition.name} is working in its own tab.`
+        : `${definition.name} is working in its own tab.` });
     } catch (err) {
       persistMessage(target.id, { kind: 'error', text: `Could not start ${definition.name}: ${(err as Error).message}` });
     }
@@ -156,6 +172,17 @@ function AppShell() {
       try {
         definitions = await bar.agentDefinitions(ws.id);
       } catch { /* treat it as an ordinary message rather than losing it */ }
+      // "/a task && /b [task]": a chain, only when every step is a known agent.
+      const chain = parseAgentChain(text, definitions);
+      if (chain?.tooLong) {
+        persistMessage(ws.id, { kind: 'user', text });
+        persistMessage(ws.id, { kind: 'meta', text: `A chain can have at most ${MAX_CHAIN_STEPS} steps. Nothing was started.` });
+        return;
+      }
+      if (chain) {
+        await startAgent(ws, chain.steps[0], text, chain.steps.slice(1));
+        return;
+      }
       const invocation = parseAgentInvocation(text, definitions);
       if (invocation) {
         await startAgent(ws, invocation, text);

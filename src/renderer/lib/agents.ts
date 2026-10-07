@@ -27,6 +27,54 @@ export function parseAgentInvocation(text: string, definitions: AgentDefinition[
   return { definition, task: (match[2] ?? '').trim() };
 }
 
+/** Most steps in a chain: "/a task && /b && /c". */
+export const MAX_CHAIN_STEPS = 3;
+
+/** The agent whose findings land in .claude/review.md, for the hand-off to the next step. */
+export const REVIEW_AGENT = 'feature-reviewer';
+export const REVIEW_FILE = '.claude/review.md';
+
+export interface AgentChain {
+  steps: AgentInvocation[];
+  /** More than MAX_CHAIN_STEPS steps were written; nothing should start. */
+  tooLong: boolean;
+}
+
+/**
+ * "/a do x && /b" -> two steps. A chain needs 2 or more parts and EVERY part must be
+ * "/<known agent> [task]"; otherwise null and the text is handled as a single message.
+ */
+export function parseAgentChain(text: string, definitions: AgentDefinition[]): AgentChain | null {
+  if (!text.includes('&&')) return null;
+  const parts = text.split('&&');
+  const steps: AgentInvocation[] = [];
+  for (const part of parts) {
+    const step = parseAgentInvocation(part, definitions);
+    if (!step) return null;
+    steps.push(step);
+  }
+  return { steps, tooLong: steps.length > MAX_CHAIN_STEPS };
+}
+
+/**
+ * The task for the next step of a chain, or a reason to stop. A step with its own text keeps it;
+ * otherwise it gets the findings file (after the review agent, when it exists) or the previous
+ * agent's final message under a one-line header.
+ */
+export function handoffTask(opts: {
+  prevDefinition: string; prevName: string; prevText: string; task: string; hasReview: boolean;
+}): { task: string } | { stop: string } {
+  if (opts.task) return { task: opts.task };
+  if (opts.prevDefinition === REVIEW_AGENT) {
+    return opts.hasReview
+      ? { task: `Implement the findings in ${REVIEW_FILE}` }
+      : { stop: 'no findings to implement' };
+  }
+  const text = opts.prevText.trim();
+  if (!text) return { stop: `${opts.prevName} left no message to hand on` };
+  return { task: `Handed on by the previous agent (${opts.prevName}):\n\n${text}` };
+}
+
 /** Tab name for a new agent: "gitama", then "gitama 2", "gitama 3", ... while others use the name. */
 export function uniqueAgentName(base: string, existing: string[]): string {
   if (!existing.includes(base)) return base;

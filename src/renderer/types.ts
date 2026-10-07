@@ -86,7 +86,7 @@ export interface Background {
 // ----- Events streamed from the main process -----
 
 export interface ClaudeEvent {
-  type: 'start' | 'session' | 'turn' | 'usage' | 'thinking' | 'text' | 'tool' | 'result' | 'error' | 'end';
+  type: 'start' | 'session' | 'turn' | 'usage' | 'thinking' | 'text' | 'tool' | 'subagent' | 'result' | 'error' | 'end';
   wsId?: string;
   sessionId?: string;
   text?: string;
@@ -98,11 +98,24 @@ export interface ClaudeEvent {
   turns?: number;
   durationMs?: number;
   contextWindow?: number | null;
+  /** Exit code on 'end' (non-zero or null when the process failed or was cancelled). */
+  code?: number | null;
   /** Tokens of one model call: a snapshot on 'turn', the final count on 'usage'. */
   usage?: Usage;
   /** Workspace lifetime totals, attached to 'usage' events. */
   totals?: Usage;
   lastContext?: number;
+  /**
+   * 'subagent' = Claude delegated to one of its agents through its Agent tool. `toolUseId` is that call's id:
+   * 'start' carries agentType/description/prompt, 'event' one thing the subagent did (`inner` = 'tool' with
+   * name/summary, or 'text' with text), 'end' its result (text, isError).
+   */
+  phase?: 'start' | 'event' | 'end';
+  toolUseId?: string;
+  agentType?: string;
+  description?: string;
+  prompt?: string;
+  inner?: 'tool' | 'text';
 }
 
 export interface AgentEvent extends ClaudeEvent {
@@ -153,6 +166,8 @@ export interface Bar {
     wsId: string, agentId: string, sessionId: string, definitionName: string, prompt: string, cwd: string,
     permissionMode: PermissionMode,
   ): void;
+  /** Whether the project has .claude/review.md (the path comes from the workspace). */
+  projectHasReview(wsId: string): Promise<boolean>;
   cancelAgent(wsId: string, agentId: string): Promise<Settings | null>;
   listAgents(wsId: string): Promise<AgentRecord[]>;
 

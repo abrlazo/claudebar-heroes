@@ -2,11 +2,43 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { bar } from '../lib/bridge';
 import { useBridgeEvent } from './useBridgeEvent';
 import { generateHero } from '../engine/heroes.js';
-import { uniqueAgentName } from '../lib/agents';
+import { MAX_AGENTS, REVIEW_AGENT, handoffTask, uniqueAgentName } from '../lib/agents';
+import type { AgentInvocation } from '../lib/agents';
 import type { GameApi } from './useGameEngine';
-import type { AgentDefinition, AgentEvent, ChatMessage, Hero, PermissionMode, Workspace } from '../types';
+import type { AgentDefinition, AgentEvent, ChatMessage, ClaudeEvent, Hero, PermissionMode, Workspace } from '../types';
 
 const DEATH_ANIMATION_MS = 600;
+
+/** The steps queued behind a new agent and how many steps the chain has in all. */
+export interface ChainSpec {
+  rest: AgentInvocation[];
+  total: number;
+}
+
+/** Steps still waiting behind a running agent ("/a x && /b"). Not persisted. */
+interface Chain extends ChainSpec {
+  ws: Workspace;
+  permissionMode: PermissionMode;
+}
+
+/** Claude's delegation to one of the project's agents, as the Expedition run reports it. */
+interface Delegation {
+  wsId: string;
+  /** checking = the project's agent definitions are still being read; ignored = not a known agent. */
+  state: 'checking' | 'live' | 'ignored';
+  agentId?: string;
+  /** Events that arrived while checking. */
+  queue: ClaudeEvent[];
+  /** The run ended while checking. */
+  closed: boolean;
+}
+
+/** Appends streamed text to the agent's last assistant message, or starts one. */
+function withText(a: Agent, text: string): Agent {
+  const tail = a.log[a.log.length - 1];
+  if (tail?.kind === 'assistant') return { ...a, log: [...a.log.slice(0, -1), { ...tail, text: tail.text + text }] };
+  return { ...a, log: [...a.log, { kind: 'assistant', text }] };
+}
 
 export interface Agent {
   id: string;
@@ -21,6 +53,11 @@ export interface Agent {
   /** Claude session of this agent, needed to send it follow-up messages. */
   sessionId?: string;
   log: ChatMessage[];
+  /**
+   * Claude delegated to this agent during the Expedition run. It has no process of its own: it cannot be
+   * messaged or stopped separately and does not use one of the MAX_AGENTS start slots. Kept in memory only.
+   */
+  observed?: boolean;
 }
 
 export interface AgentsApi {
@@ -28,14 +65,24 @@ export interface AgentsApi {
   selectedId: string | null;
   select: (id: string | null) => void;
   remove: (id: string) => void;
-  /** Starts `definition` on `task` in its own tab and orb. Rejects with an Error if it could not start. */
-  spawn: (ws: Workspace, definition: AgentDefinition, task: string, permissionMode: PermissionMode) => Promise<void>;
+  /**
+   * Starts `definition` on `task` in its own tab and orb. Rejects with an Error if it could not start.
+   * `chain` = the steps to start, one after another, as each agent finishes successfully.
+   */
+  spawn: (ws: Workspace, definition: AgentDefinition, task: string, permissionMode: PermissionMode, chain?: ChainSpec) => Promise<void>;
   /** Sends a follow-up message to a finished agent by resuming its session. */
   message: (ws: Workspace, agentId: string, prompt: string, permissionMode: PermissionMode) => void;
   /** Cancels one running agent. */
   stop: (wsId: string, agentId: string) => void;
   stopAll: (wsId: string) => void;
   running: boolean;
+  /**
+   * Feeds one 'subagent' event of the Expedition run. Returns true when it belongs to an agent shown here
+   * (or one still being checked), false for built-in or unknown agents, which stay ordinary tool lines.
+   */
+  observe: (ev: ClaudeEvent) => boolean;
+  /** The Expedition run in `wsId` ended: finish the agents Claude delegated to (cancelled when it was stopped). */
+  endObserved: (wsId: string, cancelled: boolean) => void;
 }
 
 /**
@@ -44,7 +91,14 @@ export interface AgentsApi {
  * truth is `agentsRef` so event handlers never read stale state; `agents`
  * mirrors it for rendering.
  */
-export function useAgents({ game, say }: { game: GameApi; say: (text: string, ms?: number) => void }): AgentsApi {
+export function useAgents({ game, say, notify, onUnclaimed }: {
+  game: GameApi;
+  say: (text: string, ms?: number) => void;
+  /** Posts a meta message in a workspace's Expedition chat (chain progress). */
+  notify: (wsId: string, text: string) => void;
+  /** An inner event of a delegation that turned out not to be a known agent: show it as an ordinary event. */
+  onUnclaimed: (ev: ClaudeEvent) => void;
+}): AgentsApi {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [spawning, setSpawning] = useState(0); // agents whose start request is still in flight
@@ -54,6 +108,14 @@ export function useAgents({ game, say }: { game: GameApi; say: (text: string, ms
   const pending = useRef(new Map<string, AgentEvent[]>()); // events that beat runAgent() resolving
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const created = useRef(0);
+  const chains = useRef(new Map<string, Chain>()); // running agent id -> what runs after it
+  const failed = useRef(new Set<string>()); // agents that errored or were cancelled
+  const notifyRef = useRef(notify);
+  notifyRef.current = notify;
+  const unclaimedRef = useRef(onUnclaimed);
+  unclaimedRef.current = onUnclaimed;
+  const delegations = useRef(new Map<string, Delegation>()); // Claude's Agent tool_use id -> observed agent
+  const spawnRef = useRef<AgentsApi['spawn'] | null>(null);
 
   const commit = useCallback((next: Agent[]) => {
     agentsRef.current = next;
@@ -77,22 +139,72 @@ export function useAgents({ game, say }: { game: GameApi; say: (text: string, ms
 
   useEffect(() => () => timers.current.forEach(clearTimeout), []);
 
+  /** Forgets the steps queued behind `id` and tells the chat why. */
+  const dropChain = useCallback((id: string, name: string, why: string) => {
+    const chain = chains.current.get(id);
+    if (!chain) return;
+    chains.current.delete(id);
+    const names = chain.rest.map((s) => s.definition.name).join(', ');
+    notifyRef.current(chain.ws.id, `Chain stopped: ${name} ${why}. Dropped: ${names}.`);
+  }, []);
+
   const remove = useCallback((id: string) => {
     const agent = agentsRef.current.find((a) => a.id === id);
     if (!agent || agent.dying) return;
+    dropChain(id, agent.name, 'was closed');
     update(id, (a) => ({ ...a, dying: true }));
     later(() => {
       commit(agentsRef.current.filter((a) => a.id !== id));
       if (selectedRef.current === id) select(null);
     }, DEATH_ANIMATION_MS);
-  }, [commit, later, select, update]);
+  }, [commit, dropChain, later, select, update]);
+
+  /** Starts the next queued step after `agent` finished OK, in the workspace the chain began in. */
+  const advance = useCallback(async (agent: Agent) => {
+    const wasFailed = failed.current.delete(agent.id);
+    const chain = chains.current.get(agent.id);
+    if (!chain) return;
+    chains.current.delete(agent.id);
+    const dropped = (why: string) => notifyRef.current(
+      chain.ws.id, `Chain stopped: ${why}. Dropped: ${chain.rest.map((s) => s.definition.name).join(', ')}.`,
+    );
+    if (wasFailed) { dropped(`${agent.name} failed or was cancelled`); return; }
+    const [step, ...rest] = chain.rest;
+    spawningRef.current += 1; // keeps the hero awake and events queued during the hand-off
+    setSpawning((n) => n + 1);
+    try {
+      const lastReply = [...agent.log].reverse().find((m) => m.kind === 'assistant');
+      const prevText = lastReply && lastReply.kind === 'assistant' ? lastReply.text : '';
+      let hasReview = false;
+      if (!step.task && agent.definition === REVIEW_AGENT) {
+        try { hasReview = await bar.projectHasReview(chain.ws.id); } catch { /* treated as no file */ }
+      }
+      const next = handoffTask({ prevDefinition: agent.definition, prevName: agent.name, prevText, task: step.task, hasReview });
+      if ('stop' in next) { dropped(next.stop); return; }
+      // Slots full: stop with a message (waiting could hang a chain behind unrelated work).
+      if (agentsRef.current.filter((a) => a.status === 'running' && !a.observed).length >= MAX_AGENTS) {
+        dropped(`${MAX_AGENTS} agents are already working, so ${step.definition.name} could not start`);
+        return;
+      }
+      try {
+        await spawnRef.current?.(chain.ws, step.definition, next.task, chain.permissionMode, { rest, total: chain.total });
+        notifyRef.current(chain.ws.id, `Chain: ${step.definition.name} started (step ${chain.total - rest.length} of ${chain.total}).`);
+      } catch (err) {
+        dropped(`${step.definition.name} could not start (${(err as Error).message})`);
+      }
+    } finally {
+      spawningRef.current -= 1;
+      setSpawning((n) => n - 1);
+    }
+  }, []);
 
   const complete = useCallback((id: string) => {
     const agent = agentsRef.current.find((a) => a.id === id);
     if (!agent || agent.status === 'done') return;
     update(id, (a) => ({ ...a, status: 'done' }));
-    if (agentsRef.current.every((a) => a.status === 'done')) say('All agents complete!', 2500);
-  }, [say, update]);
+    void advance(agent);
+    if (agentsRef.current.every((a) => a.status === 'done') && spawningRef.current === 0) say('All agents complete!', 2500);
+  }, [advance, say, update]);
 
   const handleEvent = useCallback((ev: AgentEvent) => {
     const { agentId, type } = ev;
@@ -111,23 +223,19 @@ export function useAgents({ game, say }: { game: GameApi; say: (text: string, ms
         if (ev.sessionId) update(agentId, (a) => ({ ...a, sessionId: ev.sessionId }));
         break;
       case 'text':
-        update(agentId, (a) => {
-          const tail = a.log[a.log.length - 1];
-          if (tail?.kind === 'assistant') {
-            return { ...a, log: [...a.log.slice(0, -1), { ...tail, text: tail.text + (ev.text ?? '') }] };
-          }
-          return { ...a, log: [...a.log, { kind: 'assistant', text: ev.text ?? '' }] };
-        });
+        update(agentId, (a) => withText(a, ev.text ?? ''));
         break;
       case 'tool':
         update(agentId, (a) => ({ ...a, log: [...a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }] }));
         game.toolEnemy(ev.name ?? '');
         break;
       case 'error':
+        failed.current.add(agentId);
         // claude.js puts error text in `message`, not `text`.
         update(agentId, (a) => ({ ...a, log: [...a.log, { kind: 'error', text: ev.message || ev.text || 'Agent error' }] }));
         break;
       case 'result':
+        if (ev.isError) failed.current.add(agentId);
         // Cost and turns live on the 'result' event, not on 'end'.
         if (ev.costUsd != null) {
           const text = `${ev.turns} turn(s) · $${ev.costUsd.toFixed(4)}`;
@@ -135,6 +243,7 @@ export function useAgents({ game, say }: { game: GameApi; say: (text: string, ms
         }
         break;
       case 'end':
+        if (ev.code !== 0) failed.current.add(agentId);
         complete(agentId);
         break;
       default:
@@ -144,7 +253,7 @@ export function useAgents({ game, say }: { game: GameApi; say: (text: string, ms
 
   useBridgeEvent<AgentEvent>(bar.onAgentEvent, handleEvent);
 
-  const spawn = useCallback(async (ws: Workspace, definition: AgentDefinition, task: string, permissionMode: PermissionMode) => {
+  const spawn = useCallback(async (ws: Workspace, definition: AgentDefinition, task: string, permissionMode: PermissionMode, chain?: ChainSpec) => {
     spawningRef.current += 1;
     setSpawning((n) => n + 1);
     try {
@@ -152,6 +261,7 @@ export function useAgents({ game, say }: { game: GameApi; say: (text: string, ms
       const result = await bar.runAgent(ws.id, definition.name, displayName, task, permissionMode);
       if (!result.agent) throw new Error(result.error || 'the agent could not start');
       const record = result.agent;
+      if (chain?.rest.length) chains.current.set(record.id, { ws, rest: chain.rest, total: chain.total, permissionMode });
       const index = created.current;
       created.current += 1;
       commit([
@@ -178,9 +288,11 @@ export function useAgents({ game, say }: { game: GameApi; say: (text: string, ms
     }
   }, [commit, game, handleEvent]);
 
+  spawnRef.current = spawn;
+
   const message = useCallback((ws: Workspace, agentId: string, prompt: string, permissionMode: PermissionMode) => {
     const agent = agentsRef.current.find((a) => a.id === agentId);
-    if (!agent || agent.status === 'running') return;
+    if (!agent || agent.status === 'running' || agent.observed) return; // observed agents have no process to resume
     if (!agent.sessionId) {
       update(agentId, (a) => ({ ...a, log: [...a.log, { kind: 'error', text: 'This agent has no session to continue.' }] }));
       return;
@@ -190,13 +302,111 @@ export function useAgents({ game, say }: { game: GameApi; say: (text: string, ms
     bar.messageAgent(ws.id, agentId, agent.sessionId, agent.definition, prompt, ws.path, permissionMode);
   }, [game, update]);
 
-  const stop = useCallback((wsId: string, agentId: string) => { bar.cancelAgent(wsId, agentId); }, []);
+  const stop = useCallback((wsId: string, agentId: string) => {
+    const agent = agentsRef.current.find((a) => a.id === agentId);
+    if (!agent || agent.observed) return; // an observed agent stops with the Expedition run
+    dropChain(agentId, agent.name, 'was stopped');
+    bar.cancelAgent(wsId, agentId);
+  }, [dropChain]);
 
   /** Cancels every agent that is still running. */
   const stopAll = useCallback((wsId: string) => {
-    for (const a of agentsRef.current) if (a.status !== 'done') bar.cancelAgent(wsId, a.id);
-  }, []);
+    for (const a of agentsRef.current) {
+      if (a.status === 'done' || a.observed) continue; // observed agents stop with the Expedition run
+      dropChain(a.id, a.name, 'was stopped');
+      bar.cancelAgent(wsId, a.id);
+    }
+  }, [dropChain]);
+
+  /** Marks an observed agent finished and logs its result (or the error). */
+  const finishObserved = useCallback((agentId: string, isError: boolean, text?: string) => {
+    const agent = agentsRef.current.find((a) => a.id === agentId);
+    if (!agent || agent.status === 'done') return;
+    const result = (text ?? '').trim();
+    update(agentId, (a) => {
+      const tail = a.log[a.log.length - 1];
+      let log = a.log;
+      if (isError) log = [...log, { kind: 'error', text: result || 'The agent failed' }];
+      else if (result && !(tail?.kind === 'assistant' && tail.text.trim() === result)) log = [...log, { kind: 'assistant', text: result }];
+      return { ...a, status: 'done', log };
+    });
+  }, [update]);
+
+  const applyObserved = useCallback((d: Delegation, ev: ClaudeEvent) => {
+    const agentId = d.agentId;
+    if (!agentId) return;
+    if (ev.phase === 'end') {
+      finishObserved(agentId, !!ev.isError, ev.text);
+    } else if (ev.phase === 'event' && ev.inner === 'tool') {
+      update(agentId, (a) => ({ ...a, log: [...a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }] }));
+      game.toolEnemy(ev.name ?? '');
+    } else if (ev.phase === 'event' && ev.inner === 'text' && ev.text) {
+      update(agentId, (a) => withText(a, ev.text ?? ''));
+    }
+  }, [finishObserved, game, update]);
+
+  /** Shows a delegation as an agent only if its type is one of the project's own definitions (same gate as "/<agent>"). */
+  const beginObserved = useCallback(async (d: Delegation, ev: ClaudeEvent) => {
+    let definitions: AgentDefinition[] = [];
+    try {
+      definitions = await bar.agentDefinitions(d.wsId);
+    } catch { /* unknown: not shown as an agent */ }
+    const wanted = (ev.agentType ?? '').toLowerCase();
+    const definition = definitions.find((def) => def.name.toLowerCase() === wanted);
+    const queued = d.queue;
+    d.queue = [];
+    if (!definition || d.closed) {
+      d.state = 'ignored';
+      if (!d.closed) queued.forEach((q) => unclaimedRef.current(q));
+      return;
+    }
+    const name = uniqueAgentName(definition.name, agentsRef.current.map((a) => a.name));
+    const id = `observed-${ev.toolUseId}`;
+    const prompt = ev.prompt || ev.description || '';
+    const index = created.current;
+    created.current += 1;
+    commit([
+      ...agentsRef.current,
+      {
+        id, name, status: 'running', definition: definition.name,
+        hero: generateHero(Math.random().toString(36).substring(7)) as Hero,
+        index, dying: false, observed: true,
+        log: prompt ? [{ kind: 'user', text: prompt }] : [],
+      },
+    ]);
+    d.state = 'live';
+    d.agentId = id;
+    game.wake();
+    notifyRef.current(d.wsId, `${name} was delegated by Claude, see its tab.`);
+    queued.forEach((q) => applyObserved(d, q));
+  }, [applyObserved, commit, game]);
+
+  const observe = useCallback((ev: ClaudeEvent): boolean => {
+    const id = ev.toolUseId;
+    if (!id) return false;
+    if (ev.phase === 'start') {
+      if (delegations.current.has(id) || !ev.wsId) return false;
+      const d: Delegation = { wsId: ev.wsId, state: 'checking', queue: [], closed: false };
+      delegations.current.set(id, d);
+      void beginObserved(d, ev);
+      return true;
+    }
+    const d = delegations.current.get(id);
+    if (!d || d.state === 'ignored') return false;
+    if (d.state === 'checking') d.queue.push(ev);
+    else applyObserved(d, ev);
+    return true;
+  }, [applyObserved, beginObserved]);
+
+  const endObserved = useCallback((wsId: string, cancelled: boolean) => {
+    for (const [id, d] of [...delegations.current]) {
+      if (d.wsId !== wsId) continue;
+      if (d.state === 'checking') d.closed = true;
+      else if (d.agentId) finishObserved(d.agentId, cancelled, cancelled ? 'Cancelled: the Expedition run was stopped.' : undefined);
+      delegations.current.delete(id);
+    }
+  }, [finishObserved]);
 
   const running = spawning > 0 || agents.some((a) => a.status !== 'done');
-  return { agents, selectedId, select, remove, spawn, message, stop, stopAll, running };
+  return { agents, selectedId, select, remove, spawn, message, stop, stopAll, running, observe, endObserved };
 }
