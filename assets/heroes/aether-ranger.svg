@@ -1,0 +1,51 @@
+<svg viewBox="0 0 128 160" width="512" height="640" xmlns="http://www.w3.org/2000/svg">
+
+  <!-- Hood/Cap -->
+  <rect x="40" y="24" width="48" height="12" fill="#4ecdc4" stroke="#000" stroke-width="1"/>
+  <polygon points="40,28 36,36 36,40 40,36" fill="#4ecdc4" stroke="#000" stroke-width="1"/>
+  <polygon points="88,28 92,36 92,40 88,36" fill="#4ecdc4" stroke="#000" stroke-width="1"/>
+
+  <!-- Head -->
+  <rect x="44" y="36" width="40" height="26" fill="#667eea" stroke="#000" stroke-width="1"/>
+
+  <!-- Eyes (keen, sharp) -->
+  <rect x="48" y="42" width="6" height="6" fill="#ffffff" stroke="#000" stroke-width="1"/>
+  <rect x="49" y="43" width="2" height="2" fill="#000"/>
+  <rect x="74" y="42" width="6" height="6" fill="#ffffff" stroke="#000" stroke-width="1"/>
+  <rect x="75" y="43" width="2" height="2" fill="#000"/>
+
+  <!-- Mouth -->
+  <rect x="56" y="54" width="16" height="3" fill="#000"/>
+
+  <!-- Leather Armor -->
+  <rect x="40" y="62" width="48" height="48" fill="#4ecdc4" stroke="#000" stroke-width="1"/>
+  <rect x="44" y="66" width="40" height="40" fill="#5dd9e0" stroke="#000" stroke-width="1"/>
+
+  <!-- Quiver (back) -->
+  <rect x="96" y="68" width="8" height="40" fill="#8b4513" stroke="#000" stroke-width="1"/>
+  <rect x="92" y="60" width="8" height="8" fill="#4ecdc4" stroke="#000" stroke-width="1"/>
+  <circle cx="96" cy="64" r="3" fill="#ffc107" stroke="#000" stroke-width="1"/>
+
+  <!-- Bow -->
+  <rect x="24" y="66" width="6" height="44" fill="#8b4513" stroke="#000" stroke-width="1"/>
+  <path d="M 25 65 Q 15 100 25 110" stroke="#ffc107" stroke-width="3" fill="none" stroke-linecap="round"/>
+
+  <!-- Arrow nocked -->
+  <rect x="18" y="92" width="8" height="3" fill="#ffc107" stroke="#000" stroke-width="1"/>
+
+  <!-- Left Arm -->
+  <rect x="32" y="72" width="10" height="36" fill="#667eea" stroke="#000" stroke-width="1"/>
+  <rect x="28" y="104" width="6" height="12" fill="#667eea" stroke="#000" stroke-width="1"/>
+
+  <!-- Right Arm -->
+  <rect x="86" y="72" width="10" height="36" fill="#667eea" stroke="#000" stroke-width="1"/>
+  <rect x="92" y="104" width="6" height="12" fill="#667eea" stroke="#000" stroke-width="1"/>
+
+  <!-- Athletic Legs (archer stance) -->
+  <rect x="48" y="110" width="10" height="36" fill="#4ecdc4" stroke="#000" stroke-width="1"/>
+  <rect x="62" y="110" width="10" height="36" fill="#4ecdc4" stroke="#000" stroke-width="1"/>
+
+  <!-- Boots -->
+  <rect x="46" y="146" width="12" height="10" fill="#333333" stroke="#000" stroke-width="1"/>
+  <rect x="60" y="146" width="12" height="10" fill="#333333" stroke="#000" stroke-width="1"/>
+</svg>

@@ -1,0 +1,46 @@
+<svg viewBox="0 0 128 160" width="512" height="640" xmlns="http://www.w3.org/2000/svg">
+
+  <!-- Helmet -->
+  <rect x="44" y="28" width="40" height="8" fill="#ff6b6b" stroke="#000" stroke-width="1"/>
+  <polygon points="52,20 56,28 60,28 64,20" fill="#ff6b6b" stroke="#000" stroke-width="1"/>
+
+  <!-- Head -->
+  <rect x="44" y="32" width="40" height="32" fill="#667eea" stroke="#000" stroke-width="1"/>
+
+  <!-- Eyes -->
+  <rect x="48" y="40" width="6" height="6" fill="#ffffff" stroke="#000" stroke-width="1"/>
+  <rect x="50" y="42" width="2" height="2" fill="#000"/>
+  <rect x="74" y="40" width="6" height="6" fill="#ffffff" stroke="#000" stroke-width="1"/>
+  <rect x="76" y="42" width="2" height="2" fill="#000"/>
+
+  <!-- Mouth -->
+  <rect x="56" y="54" width="16" height="4" fill="#000"/>
+
+  <!-- Armor Body -->
+  <rect x="40" y="64" width="48" height="40" fill="#ff6b6b" stroke="#000" stroke-width="1"/>
+
+  <!-- Chest Plate -->
+  <rect x="48" y="68" width="32" height="32" fill="#ffb300" stroke="#000" stroke-width="1"/>
+  <rect x="52" y="76" width="4" height="16" fill="#ffd93d" stroke="#000" stroke-width="1"/>
+  <rect x="72" y="76" width="4" height="16" fill="#ffd93d" stroke="#000" stroke-width="1"/>
+
+  <!-- Left Arm -->
+  <rect x="28" y="68" width="12" height="40" fill="#667eea" stroke="#000" stroke-width="1"/>
+  <rect x="24" y="100" width="8" height="20" fill="#667eea" stroke="#000" stroke-width="1"/>
+
+  <!-- Sword -->
+  <rect x="20" y="50" width="8" height="60" fill="#ffc107" stroke="#000" stroke-width="1"/>
+  <rect x="18" y="46" width="12" height="8" fill="#cd7f32" stroke="#000" stroke-width="1"/>
+
+  <!-- Right Arm -->
+  <rect x="88" y="68" width="12" height="40" fill="#667eea" stroke="#000" stroke-width="1"/>
+  <rect x="96" y="100" width="8" height="20" fill="#667eea" stroke="#000" stroke-width="1"/>
+
+  <!-- Legs -->
+  <rect x="52" y="104" width="12" height="36" fill="#667eea" stroke="#000" stroke-width="1"/>
+  <rect x="64" y="104" width="12" height="36" fill="#667eea" stroke="#000" stroke-width="1"/>
+
+  <!-- Boots -->
+  <rect x="50" y="140" width="16" height="12" fill="#ff6b6b" stroke="#000" stroke-width="1"/>
+  <rect x="62" y="140" width="16" height="12" fill="#ff6b6b" stroke="#000" stroke-width="1"/>
+</svg>

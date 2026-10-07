@@ -1,0 +1,39 @@
+<svg viewBox="0 0 128 160" width="512" height="640" xmlns="http://www.w3.org/2000/svg">
+
+  <!-- Hood/Mask -->
+  <rect x="40" y="24" width="48" height="20" fill="#333333" stroke="#000" stroke-width="1"/>
+  <rect x="36" y="30" width="8" height="20" fill="#333333" stroke="#000" stroke-width="1"/>
+  <rect x="84" y="30" width="8" height="20" fill="#333333" stroke="#000" stroke-width="1"/>
+
+  <!-- Head -->
+  <rect x="44" y="44" width="40" height="24" fill="#667eea" stroke="#000" stroke-width="1"/>
+
+  <!-- Eyes (narrow, mysterious) -->
+  <rect x="48" y="50" width="5" height="5" fill="#ffffff" stroke="#000" stroke-width="1"/>
+  <rect x="75" y="50" width="5" height="5" fill="#ffffff" stroke="#000" stroke-width="1"/>
+  <rect x="49" y="51" width="2" height="2" fill="#000"/>
+  <rect x="76" y="51" width="2" height="2" fill="#000"/>
+
+  <!-- Mouth (hidden by mask) -->
+  <rect x="58" y="60" width="8" height="2" fill="#666666"/>
+
+  <!-- Black Outfit -->
+  <rect x="40" y="68" width="48" height="44" fill="#1a1a2e" stroke="#000" stroke-width="1"/>
+  <rect x="44" y="72" width="40" height="36" fill="#2d2d44" stroke="#000" stroke-width="1"/>
+
+  <!-- Left Dagger -->
+  <rect x="28" y="68" width="6" height="48" fill="#ffc107" stroke="#000" stroke-width="1"/>
+  <rect x="26" y="62" width="10" height="8" fill="#cd7f32" stroke="#000" stroke-width="1"/>
+
+  <!-- Right Dagger -->
+  <rect x="94" y="68" width="6" height="48" fill="#ffc107" stroke="#000" stroke-width="1"/>
+  <rect x="92" y="62" width="10" height="8" fill="#cd7f32" stroke="#000" stroke-width="1"/>
+
+  <!-- Athletic Legs (crouched stance) -->
+  <rect x="48" y="112" width="10" height="32" fill="#333333" stroke="#000" stroke-width="1"/>
+  <rect x="62" y="112" width="10" height="32" fill="#333333" stroke="#000" stroke-width="1"/>
+
+  <!-- Boots -->
+  <rect x="46" y="144" width="14" height="10" fill="#1a1a2e" stroke="#000" stroke-width="1"/>
+  <rect x="60" y="144" width="14" height="10" fill="#1a1a2e" stroke="#000" stroke-width="1"/>
+</svg>
