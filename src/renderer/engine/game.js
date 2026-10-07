@@ -172,11 +172,19 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
   }
 
   function fireProjectile(ally, targetX) {
-    // Shots start at the ally's orb (its formation slot, set by the renderer).
-    const bottom = ally.bottom ?? 40;
+    // Shots start where the ally's wisp is right now (one rect read per shot).
+    let x = ally.x + 12;
+    let y = stage.clientHeight - (ally.bottom ?? 34) - 12;
+    const wisp = ally.minion?.querySelector('canvas');
+    if (wisp) {
+      const r = wisp.getBoundingClientRect();
+      const s = stage.getBoundingClientRect();
+      x = r.left - s.left + r.width / 2;
+      y = r.top - s.top + r.height / 2;
+    }
     const projectile = {
-      x: ally.x + 16,
-      y: stage.clientHeight - bottom - 16,
+      x,
+      y,
       targetX,
       type: ally.attackType === 'magic' ? 'magic' : 'arrow',
       speed: ally.attackType === 'magic' ? 150 : 200,
@@ -425,13 +433,13 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
       state.allies = allyHeroes.map((h, i) => spawnAlly(h, i, allyHeroes.length));
     },
 
-    /** Links each ally to the DOM node React rendered for it (by index) and reads its formation slot. */
+    /** Links each ally to the DOM node React rendered for it (by index) and reads its anchor (hero's body). */
     setMinionElements(minionElements) {
       state.allies.forEach((ally, i) => {
         ally.minion = minionElements[i] ?? null;
         if (ally.minion) {
           ally.x = parseFloat(ally.minion.style.left) || 0;
-          ally.bottom = parseFloat(ally.minion.style.bottom) || 40;
+          ally.bottom = parseFloat(ally.minion.style.bottom) || 34;
         }
       });
     },

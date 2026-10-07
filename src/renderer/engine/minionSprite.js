@@ -1,5 +1,5 @@
-// Draws the spirit orb shown for each running agent: a glowing sphere with a
-// soft halo. It is painted once; floating and glow pulsing are CSS animations
+// Draws the spirit orb shown for each running agent: a small wisp (bright
+// core, glow, short tail). It is painted once; orbiting, wobble and glow pulsing are CSS animations
 // (see styles.css) so the motion stays smooth and costs no per-frame drawing.
 
 const ORB_COLORS = [
@@ -16,42 +16,31 @@ export function orbPalette(hero, index) {
   return ORB_COLORS[i % ORB_COLORS.length];
 }
 
-/** Paints a 32x32 orb onto `canvas` with the agent's colour. */
+/** Paints a 24x24 wisp onto `canvas` with the agent's colour: bright core, soft glow, tail to the upper right. */
 export function drawMinionSprite(canvas, hero, index = 0) {
   const ctx = canvas.getContext('2d');
-  const { bright, mid, dim } = orbPalette(hero, index);
-  const cx = 16;
-  const cy = 16;
+  const { bright } = orbPalette(hero, index);
+  const cx = 10;
+  const cy = 14;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // Soft halo.
-  const halo = ctx.createRadialGradient(cx, cy, 4, cx, cy, 15);
-  halo.addColorStop(0, `${bright}66`);
-  halo.addColorStop(1, `${bright}00`);
-  ctx.fillStyle = halo;
-  ctx.beginPath();
-  ctx.arc(cx, cy, 15, 0, Math.PI * 2);
-  ctx.fill();
+  const blob = (x, y, r, color, alpha) => {
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, color);
+    g.addColorStop(1, `${bright}00`);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  };
 
-  // Sphere, lit from the upper left.
-  const body = ctx.createRadialGradient(cx - 3, cy - 3, 1, cx, cy, 9);
-  body.addColorStop(0, '#ffffff');
-  body.addColorStop(0.25, bright);
-  body.addColorStop(0.7, mid);
-  body.addColorStop(1, dim);
-  ctx.fillStyle = body;
-  ctx.beginPath();
-  ctx.arc(cx, cy, 8, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Rim light and specular dot.
-  ctx.strokeStyle = `${bright}aa`;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.arc(cx, cy, 8, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.fillStyle = '#ffffffcc';
-  ctx.beginPath();
-  ctx.ellipse(cx - 3, cy - 4, 2, 1.4, -0.6, 0, Math.PI * 2);
-  ctx.fill();
+  // Tail: fading blobs that taper away to the upper right.
+  blob(cx + 5, cy - 4, 4, `${bright}cc`, 0.7);
+  blob(cx + 8, cy - 7, 3, `${bright}aa`, 0.5);
+  blob(cx + 11, cy - 9, 2, `${bright}88`, 0.3);
+  // Soft glow, then the bright core (about 3px).
+  blob(cx, cy, 9, `${bright}88`, 1);
+  blob(cx, cy, 2.5, '#ffffff', 1);
+  ctx.globalAlpha = 1;
 }
