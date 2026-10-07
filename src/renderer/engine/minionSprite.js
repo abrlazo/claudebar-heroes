@@ -36,11 +36,12 @@ export function drawMinionSprite(canvas, hero, index = 0) {
   };
 
   // Tail: fading blobs that taper away to the upper right.
-  blob(cx + 5, cy - 4, 4, `${bright}cc`, 0.7);
-  blob(cx + 8, cy - 7, 3, `${bright}aa`, 0.5);
-  blob(cx + 11, cy - 9, 2, `${bright}88`, 0.3);
+  blob(cx + 5, cy - 4, 4.5, `${bright}ff`, 0.9);
+  blob(cx + 8, cy - 7, 3, `${bright}dd`, 0.7);
+  blob(cx + 11, cy - 9, 2, `${bright}bb`, 0.5);
   // Soft glow, then the bright core (about 3px).
-  blob(cx, cy, 9, `${bright}88`, 1);
-  blob(cx, cy, 2.5, '#ffffff', 1);
+  blob(cx, cy, 10, `${bright}cc`, 1);
+  blob(cx, cy, 5, `${bright}ff`, 1);
+  blob(cx, cy, 3.5, '#ffffff', 1);
   ctx.globalAlpha = 1;
 }

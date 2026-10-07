@@ -34,12 +34,13 @@ function Minion({ agent, register }: {
   useEffect(() => {
     if (canvasRef.current) drawMinionSprite(canvasRef.current, agent.hero, agent.index);
   }, [agent.hero, agent.index]);
-  const glow = orbPalette(agent.hero, agent.index).bright;
+  const { bright: glow, dim: rim } = orbPalette(agent.hero, agent.index);
+  const calm = agent.status !== 'running';
 
   return (
     <div
       ref={(el) => register(agent.id, el)}
-      className={`minion${agent.dying ? ' dying' : ''}`}
+      className={`minion${agent.dying ? ' dying' : ''}${calm ? ' calm' : ''}`}
       title={`${agent.name} (${agent.hero.name} the ${agent.hero.cls})`}
       style={orbitStyle(agent.index)}
     >
@@ -48,7 +49,7 @@ function Minion({ agent, register }: {
           ref={canvasRef}
           width={24}
           height={24}
-          style={{ ['--orb-glow' as string]: glow }}
+          style={{ ['--orb-glow' as string]: glow, ['--orb-rim' as string]: rim }}
         />
       </div>
     </div>

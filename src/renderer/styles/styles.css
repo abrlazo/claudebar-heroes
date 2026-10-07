@@ -574,9 +574,20 @@ body.theme-light .settings-controls select { border-color: #d0d0d5; }
   0%, 100% { transform: translate(0, 0); }
   50% { transform: translate(0, -2px); }
 }
+/* Glow = the agent's own saturated colour in layers (visible on light and dark), plus a thin dark rim
+   from its dim shade so the wisp does not wash out on the light theme. Only filter/opacity animate. */
 @keyframes minion-glow {
-  0%, 100% { filter: drop-shadow(0 0 2px var(--orb-glow)) brightness(0.95); }
-  50% { filter: drop-shadow(0 0 6px var(--orb-glow)) brightness(1.15); }
+  0%, 100% { filter: drop-shadow(0 0 1px var(--orb-rim)) drop-shadow(0 0 4px var(--orb-glow)) drop-shadow(0 0 9px var(--orb-glow)) brightness(1.1) saturate(1.2); }
+  50% { filter: drop-shadow(0 0 1px var(--orb-rim)) drop-shadow(0 0 7px var(--orb-glow)) drop-shadow(0 0 14px var(--orb-glow)) brightness(1.3) saturate(1.3); }
+}
+/* A finished agent stays visible but calmer: static glow, slower, a little dimmer. */
+.minion.calm canvas {
+  animation: minion-float 3.6s ease-in-out infinite;
+  filter: drop-shadow(0 0 1px var(--orb-rim)) drop-shadow(0 0 5px var(--orb-glow)) brightness(1.05);
+  opacity: 0.8;
+}
+@media (prefers-reduced-motion: reduce) {
+  .minion canvas, .minion.calm canvas { animation: none; }
 }
 
 .stat-base { font-size: 11px; font-weight: normal; color: var(--muted); }
