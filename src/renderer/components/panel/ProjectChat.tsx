@@ -2,6 +2,7 @@ import { AgentTabs } from './AgentTabs';
 import { MessageLog } from '../common/MessageLog';
 import { Composer } from '../common/Composer';
 import { ModelSelect } from '../common/ModelSelect';
+import { useCommandCatalog } from '../../hooks/useCommandCatalog';
 import { useSettings } from '../../context/SettingsContext';
 import type { AgentsApi } from '../../hooks/useAgents';
 import type { ClaudeRun } from '../../hooks/useClaudeRun';
@@ -39,6 +40,7 @@ export function ProjectChat({
   visible, ws, run, agents, busy, projectBusy, model, onModelChange, onSend, onStop, workspaceActions,
 }: ProjectChatProps & { visible: boolean }) {
   const { settings, updateSettings } = useSettings();
+  const { suggestions, refresh: refreshCommands } = useCommandCatalog(ws?.id ?? null);
   const agent = agents.agents.find((a) => a.id === agents.selectedId);
   const messages = agent ? agent.log : ws?.messages || [];
   const showsRun = !agent && !!ws && run.streaming.wsId === ws.id;
@@ -67,6 +69,8 @@ export function ProjectChat({
         busy={agent ? agent.status === 'running' : (projectBusy ?? busy)}
         disabled={!ws}
         onSend={onSend}
+        suggestions={suggestions}
+        onSuggestionsOpen={refreshCommands}
         onStop={agent && ws ? () => agents.stop(ws.id, agent.id) : onStop}
         placeholder={agent
           ? `Message ${agent.name}… (Enter to send, Shift+Enter for a new line)`

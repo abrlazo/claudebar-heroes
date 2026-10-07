@@ -22,7 +22,9 @@ function getMinionsLayout(index: number, total: number): { left: string; bottom:
 }
 
 /** One spirit orb per agent, hovering in its formation slot. */
-function Minion({ agent, total, register }: { agent: Agent; total: number; register: (id: string, el: HTMLDivElement | null) => void }) {
+function Minion({ agent, slot, total, register }: {
+  agent: Agent; slot: number; total: number; register: (id: string, el: HTMLDivElement | null) => void;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // The orb is painted once; floating and glow are CSS animations.
   useEffect(() => {
@@ -30,14 +32,12 @@ function Minion({ agent, total, register }: { agent: Agent; total: number; regis
   }, [agent.hero, agent.index]);
   const glow = orbPalette(agent.hero, agent.index).bright;
 
-  const style = useRef(getMinionsLayout(agent.index, total)).current;
-
   return (
     <div
       ref={(el) => register(agent.id, el)}
       className={`minion${agent.dying ? ' dying' : ''}`}
-      title={`${agent.hero.name} the ${agent.hero.cls}`}
-      style={style}
+      title={`${agent.name} (${agent.hero.name} the ${agent.hero.cls})`}
+      style={getMinionsLayout(slot, total)}
     >
       <canvas
         ref={canvasRef}
@@ -53,28 +53,29 @@ function Minion({ agent, total, register }: { agent: Agent; total: number; regis
 }
 
 /**
- * One orb per agent. After each render the DOM nodes of the newest batch are
- * handed to the engine so it can fire projectiles from their slots.
+ * One orb per agent. Agents arrive one at a time ("/<agent> <task>"), so slots are
+ * re-spread over everyone currently shown whenever one starts or is closed; the CSS
+ * transition slides the orbs into place. After each change the engine is told which
+ * agents are working and where their orbs are, so it can fire projectiles from them.
  */
-export function Minions({ agents, batch, game }: { agents: Agent[]; batch: number; game: GameApi }) {
+export function Minions({ agents, game }: { agents: Agent[]; game: GameApi }) {
   const els = useRef(new Map<string, HTMLDivElement>());
   const register = (id: string, el: HTMLDivElement | null) => {
     if (el) els.current.set(id, el);
     else els.current.delete(id);
   };
 
+  // Re-sync only when the set of agents or their working state changes, not on every log line:
+  // setAllies resets the allies' firing cooldowns.
+  const working = agents.filter((a) => a.status === 'running' && !a.dying);
+  const layoutKey = `${agents.map((a) => `${a.id}:${a.dying ? 'x' : 'o'}`).join(',')}|${working.map((a) => a.id).join(',')}`;
   useLayoutEffect(() => {
-    const ordered: (HTMLElement | undefined)[] = [];
-    for (const a of agents) if (a.batch === batch && !a.dying) ordered[a.index] = els.current.get(a.id);
-    game.setMinionElements(ordered);
-  }, [agents, batch, game]);
+    game.setAllies(working.map((a) => a.hero));
+    game.setMinionElements(working.map((a) => els.current.get(a.id)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- layoutKey captures everything that matters
+  }, [layoutKey, game]);
 
-  return agents.map((agent) => (
-    <Minion
-      key={agent.id}
-      agent={agent}
-      total={agents.filter((a) => a.batch === agent.batch).length}
-      register={register}
-    />
+  return agents.map((agent, slot) => (
+    <Minion key={agent.id} agent={agent} slot={slot} total={agents.length} register={register} />
   ));
 }
