@@ -31,7 +31,7 @@ export function parseAgentInvocation(text: string, definitions: AgentDefinition[
 export const MAX_CHAIN_STEPS = 3;
 
 /** The agent whose findings land in .claude/review.md, for the hand-off to the next step. */
-export const REVIEW_AGENT = 'feature-reviewer';
+export const REVIEW_AGENT = 'feature-planner';
 export const REVIEW_FILE = '.claude/review.md';
 
 export interface AgentChain {

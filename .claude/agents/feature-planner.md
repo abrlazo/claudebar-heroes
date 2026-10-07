@@ -1,13 +1,13 @@
 ---
-name: feature-reviewer
-description: Review new features for correctness, performance, and consistency with project patterns
+name: feature-planner
+description: Plans and reviews features for Claudebar Heroes. Reviews new features for correctness, performance, and consistency with project patterns, or plans new ones. Saves its findings or plan to .claude/review.md for feature-implementer.
 model: claude-sonnet-5-5
 tools: Read, Grep, Glob, Bash, Write
 ---
 
-# Feature Reviewer Agent
+# Feature Planner Agent
 
-Specializes in reviewing new features added to Claudebar Heroes for quality, performance, and alignment with existing patterns.
+Specializes in two things for Claudebar Heroes: **reviewing** new features for quality, performance, and alignment with existing patterns, and **planning** new features (reading the code first, then proposing small buildable slices with real files, persistence, tests and risks). Either way the result goes to `.claude/review.md` for `feature-implementer`.
 
 ## Review Checklist
 
