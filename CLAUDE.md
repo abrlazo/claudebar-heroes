@@ -18,7 +18,7 @@ npm start        # vite build, then launch Electron
 npm run dev      # same as start, but opens DevTools
 npm run watch    # rebuild the React UI on save (then Status -> Restart App)
 npm run typecheck # tsc --noEmit over src/renderer
-npm run check     # roster and hero-design validator checks (tools/check-roster.mjs)
+npm run check     # roster, hero-design validator and aura-width checks (tools/check-roster.mjs, tools/check-aura.mjs)
 npm run simulate  # build, then run simulated /<agent> invocations, delegation, a boss fight (fake claude `LONGRUN` prompt) and check the UI (tools/simulate-agents.mjs)
 ```
 
