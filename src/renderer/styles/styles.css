@@ -296,11 +296,19 @@ body.theme-light .agent-tabs { background: rgba(245, 245, 247, 0.7); }
 
 .minion {
   position: absolute;
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
   opacity: 1;
-  transition: opacity 0.3s, left 0.45s ease, bottom 0.45s ease;
+  transition: opacity 0.3s;
   filter: brightness(1);
+  /* behind the hero (z-index 2) on the upper half of the orbit, in front on the lower half */
+  animation: wisp-depth var(--orbit-dur, 5s) linear infinite;
+  animation-delay: var(--orbit-delay, 0s);
+}
+@keyframes wisp-depth {
+  0% { z-index: 1; }
+  50% { z-index: 3; }
+  100% { z-index: 3; }
 }
 
 .minion.dying {
@@ -518,16 +526,27 @@ body.theme-light .settings-controls select { border-color: #d0d0d5; }
 @keyframes working-dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75%, 100% { content: '...'; } }
 @keyframes working-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
 
-/* Spirit orbs drift on a slow, looping path and pulse softly; staggered per agent. */
+/* Wisps circle the hero's body: the orbit runs on .wisp, a small wobble and the glow on the canvas. */
+.wisp {
+  width: 24px;
+  height: 24px;
+  animation: wisp-orbit var(--orbit-dur, 5s) linear infinite;
+  animation-delay: var(--orbit-delay, 0s);
+  will-change: transform;
+}
+@keyframes wisp-orbit {
+  0%, 100% { transform: translate(var(--orbit-rx), 0); }
+  25% { transform: translate(0, calc(var(--orbit-ry) * -1)); }
+  50% { transform: translate(calc(var(--orbit-rx) * -1), 0); }
+  75% { transform: translate(0, calc(var(--orbit-ry) * 0.6)); }
+}
 .minion canvas {
-  animation: minion-float 6s ease-in-out infinite, minion-glow 3s ease-in-out infinite;
+  animation: minion-float 2.4s ease-in-out infinite, minion-glow 3s ease-in-out infinite;
   will-change: transform, filter;
 }
 @keyframes minion-float {
   0%, 100% { transform: translate(0, 0); }
-  25% { transform: translate(2px, -3px); }
-  50% { transform: translate(0, -6px); }
-  75% { transform: translate(-2px, -3px); }
+  50% { transform: translate(0, -2px); }
 }
 @keyframes minion-glow {
   0%, 100% { filter: drop-shadow(0 0 2px var(--orb-glow)) brightness(0.95); }

@@ -67,12 +67,14 @@ export function ProjectChat({
       <Composer
         focused={visible}
         busy={agent ? agent.status === 'running' : (projectBusy ?? busy)}
-        disabled={!ws}
+        disabled={!ws || !!agent?.observed}
         onSend={onSend}
         suggestions={suggestions}
         onSuggestionsOpen={refreshCommands}
-        onStop={agent && ws ? () => agents.stop(ws.id, agent.id) : onStop}
-        placeholder={agent
+        onStop={agent && !agent.observed && ws ? () => agents.stop(ws.id, agent.id) : onStop}
+        placeholder={agent?.observed
+          ? "Claude is running this agent; it can't be messaged. Stop ends the whole run."
+          : agent
           ? `Message ${agent.name}… (Enter to send, Shift+Enter for a new line)`
           : ws
             ? `Ask Claude about ${ws.name}… (Enter to send, Shift+Enter for a new line)`

@@ -1,32 +1,36 @@
+import type React from 'react';
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { drawMinionSprite, orbPalette } from '../../engine/minionSprite.js';
 import type { Agent } from '../../hooks/useAgents';
 import type { GameApi } from '../../hooks/useGameEngine';
 
-// Orbs hover in a tight formation around the hero (hero sprite: x 40-104, up to
-// 68px high). Slots are one orb apart (32px, so boxes never overlap) and stay
-// inside the stage (92px high) so none is clipped.
+// Each agent is a wisp that orbits the hero's body (hero sprite: x 40-104, up to 68px
+// high) on its own period and phase. Every wrapper sits at the chest centre; the motion is
+// a CSS animation on the inner element (styles.css), so the wrapper never moves. The
+// orbit stays inside the stage (92px high): ry + WISP/2 + CHEST <= 92.
 const HERO_CENTER = 72;
-const ORB = 32;
-const SPACING = 34;
-const LOW = 36;   // chest height, beside the hero
-const HIGH = 56;  // just above the hero's head
+const WISP = 24;
+const CHEST = 34;  // bottom of the wrapper
+const RX = 34;
+const RY = [26, 20, 30, 23, 28];
 
-function getMinionsLayout(index: number, total: number): { left: string; bottom: string } {
-  if (total === 1) return { left: `${HERO_CENTER + 20}px`, bottom: '44px' };
-  if (total === 2) return { left: `${HERO_CENTER - ORB / 2 + (index ? 32 : -32)}px`, bottom: '44px' };
-  const t = index / (total - 1);
-  const x = HERO_CENTER - ORB / 2 + (index - (total - 1) / 2) * SPACING;
-  const y = LOW + Math.sin(t * Math.PI) * (HIGH - LOW); // middle ones hover higher
-  return { left: `${Math.round(x)}px`, bottom: `${Math.round(y)}px` };
+function orbitStyle(index: number): React.CSSProperties {
+  return {
+    left: `${HERO_CENTER - WISP / 2}px`,
+    bottom: `${CHEST}px`,
+    ['--orbit-delay' as string]: `${-index * 1.3}s`,
+    ['--orbit-dur' as string]: `${5 + index * 0.7}s`,
+    ['--orbit-rx' as string]: `${RX}px`,
+    ['--orbit-ry' as string]: `${RY[index % RY.length]}px`,
+  };
 }
 
-/** One spirit orb per agent, hovering in its formation slot. */
-function Minion({ agent, slot, total, register }: {
-  agent: Agent; slot: number; total: number; register: (id: string, el: HTMLDivElement | null) => void;
+/** One wisp per agent, orbiting the hero's body. */
+function Minion({ agent, register }: {
+  agent: Agent; register: (id: string, el: HTMLDivElement | null) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  // The orb is painted once; floating and glow are CSS animations.
+  // The wisp is painted once; orbit, wobble and glow are CSS animations.
   useEffect(() => {
     if (canvasRef.current) drawMinionSprite(canvasRef.current, agent.hero, agent.index);
   }, [agent.hero, agent.index]);
@@ -37,26 +41,24 @@ function Minion({ agent, slot, total, register }: {
       ref={(el) => register(agent.id, el)}
       className={`minion${agent.dying ? ' dying' : ''}`}
       title={`${agent.name} (${agent.hero.name} the ${agent.hero.cls})`}
-      style={getMinionsLayout(slot, total)}
+      style={orbitStyle(agent.index)}
     >
-      <canvas
-        ref={canvasRef}
-        width={32}
-        height={32}
-        style={{
-          ['--orb-glow' as string]: glow,
-          animationDelay: `${-agent.index * 1.7}s, ${-agent.index * 0.9}s`,
-        }}
-      />
+      <div className="wisp">
+        <canvas
+          ref={canvasRef}
+          width={24}
+          height={24}
+          style={{ ['--orb-glow' as string]: glow }}
+        />
+      </div>
     </div>
   );
 }
 
 /**
- * One orb per agent. Agents arrive one at a time ("/<agent> <task>"), so slots are
- * re-spread over everyone currently shown whenever one starts or is closed; the CSS
- * transition slides the orbs into place. After each change the engine is told which
- * agents are working and where their orbs are, so it can fire projectiles from them.
+ * One wisp per agent, each orbiting the hero on its own period and phase. After each
+ * change the engine is told which agents are working and which element is theirs, so it
+ * can fire projectiles from the wisp.
  */
 export function Minions({ agents, game }: { agents: Agent[]; game: GameApi }) {
   const els = useRef(new Map<string, HTMLDivElement>());
@@ -75,7 +77,7 @@ export function Minions({ agents, game }: { agents: Agent[]; game: GameApi }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- layoutKey captures everything that matters
   }, [layoutKey, game]);
 
-  return agents.map((agent, slot) => (
-    <Minion key={agent.id} agent={agent} slot={slot} total={agents.length} register={register} />
+  return agents.map((agent) => (
+    <Minion key={agent.id} agent={agent} register={register} />
   ));
 }
