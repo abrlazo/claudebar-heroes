@@ -599,9 +599,9 @@ body.theme-light .settings-controls select { border-color: #d0d0d5; }
 #aura-canvas {
   display: none;
   position: absolute;
-  left: -24px;
+  left: -6px;
   bottom: -6px;
-  width: 112px;
+  width: 60px;
   height: 110px;
   z-index: -1;
   image-rendering: pixelated;
