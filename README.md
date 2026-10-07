@@ -27,20 +27,21 @@ npm start
 | `npm run watch` | Rebuilds the UI on every save (then use Status -> Restart App) |
 | `npm run build` | Bundles the UI into `dist/renderer` without launching |
 | `npm run typecheck` | Runs `tsc --noEmit` over `src/renderer` |
-| `npm run simulate` | Builds, then runs 3 simulated `/<agent>` invocations against a fake `claude` and checks the UI |
+| `npm run check` | Validates the character roster, hero-design allowlists and boss roll helpers (`tools/check-roster.mjs`) |
+| `npm run simulate` | Builds, then runs 3 simulated `/<agent>` invocations against a fake `claude` and checks the UI (also map bosses, trophies, crits and combos) |
 
 Open the chat with the speech-bubble button on the strip or with `Cmd/Ctrl+Shift+Space`.
 
 ## How it works
 
 - **Heroes and levels:** XP comes from tokens Claude uses in the project (cached context counts less); the HUD shows how full the context window is.
-- **Monsters:** one per tool call (goblins, skeletons, orcs, imps); every 8 kills clears a stage and moves to the next map.
-- **Agent chains:** `/<agent> <task> && /<agent> [task]` (2 or 3 steps, every step a known agent) runs them one after another in the same project. A step with no task gets the previous agent's final message (or, after `feature-reviewer`, "implement the findings in `.claude/review.md`"). A failed, stopped or closed step drops the rest; chains are not saved across restarts.
+- **Monsters:** one per tool call (goblins, skeletons, orcs, imps); every 8 kills clears a stage and moves to the next map. Each stage has a rare chance (about 5%) that its 8th fight is a boss (bigger, crowned, gold name, much more HP); beating it drops a trophy on the Status tab's shelf (kept per project). Hits can crit and quick kills build a combo (`x3 COMBO`, up to +25% damage).
+- **Agent chains:** `/<agent> <task> && /<agent> [task]` (2 or 3 steps, every step a known agent) runs them one after another in the same project. A step with no task gets the previous agent's final message (or, after `feature-planner`, "implement the findings in `.claude/review.md`"). A failed, stopped or closed step drops the rest; chains are not saved across restarts.
 - **Agents:** type `/<agent-name> <task>` for any agent defined under `.claude/agents/` (for example `/gitama commit these changes`). It runs as its own Claude process (up to 4 at once) with its own orb, tab and chat. Skills, other slash commands and anything not in `.claude/agents/` are not agents and are sent to Claude as normal messages. Headless runs cannot ask for permission, so pick *Accept edits* or *Bypass perms* in the footer for agents that need tools like Bash.
 - **Delegated agents:** when Claude itself hands work to one of the project's agents (its Agent tool), that agent also gets a tab and an orb, marked as running inside Claude's run. They are read-only (you cannot message them, Stop ends the whole run) and are not saved across restarts. Built-in agent types such as `Explore` stay ordinary tool lines.
 - **Command suggestions:** typing `/` in the Expedition chat opens a popup of everything you can run: your agents, Claude's own commands (built-ins such as `/compact` or `/context`, skills, custom commands) and the app's own `/plan` and `summon`. Type to narrow it, Up/Down to move, Enter or Tab to pick, Esc to close. Commands that only work in the terminal (`/help`, `/doctor`...) are left out. `/plan [task]` switches the footer to *Plan only* and sends the task.
 - **Ask chat:** an in-memory chat that is not tied to a project.
-- **Summoning:** type `summon <name>` in the project chat to turn the project's hero into that character (Darth Vader, Yoda, Gandalf, Goku, Batman and Link are hand-built).
+- **Summoning:** type `summon <name>` in the project chat to turn the project's hero into that character (Darth Vader, Yoda, Gandalf, Goku, Batman, Link and 14 more such as Naruto, Mario, Spider-Man and Pikachu are hand-built). Any other name asks Claude once (no tools, cheap model) to design a look from the allowed parts and colours; it is validated, saved and reused, and if it fails you get a generated hero.
 - **Prestige:** the weapon glows from level 10 and an aura appears from level 15.
 
 The app runs Claude Code headlessly (`claude -p --output-format stream-json`), so it uses your existing login. Headless Claude cannot show permission prompts, so pick *Accept edits* or *Bypass permissions* in the panel if you want it to change files freely. See [CLAUDE.md](CLAUDE.md) for the architecture.
