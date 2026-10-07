@@ -65,7 +65,7 @@ export const VADER_SEED = 'secret:darth-vader'; // kept as-is so saved Vader her
 
 const palette = (c) => ({ hair: '#2a1d17', pants: '#3b3b58', boots: '#2b1d14', metal: '#cfd8e3', ...c });
 
-const CHARACTERS = [
+export const CHARACTERS = [
   {
     names: ['darth vader', 'vader'],
     seed: VADER_SEED,
@@ -140,13 +140,204 @@ const CHARACTERS = [
       stats: { hp: 125, atk: 125, def: 120, spd: 115 },
     },
   },
+  {
+    names: ['naruto', 'naruto uzumaki'],
+    quote: 'Believe it!',
+    hero: {
+      name: 'Naruto', classId: 'ninja', cls: 'Ninja',
+      weapon: 'daggers', body: 'gi', shield: false, cape: false, gear: 'headband', hair: 'spiky',
+      colors: palette({
+        skin: '#f3c9a6', hair: '#f5d142', primary: '#ff7a00', secondary: '#1e3a8a', accent: '#3b5ba5',
+        pants: '#ff7a00', boots: '#1e3a8a',
+      }),
+      stats: { hp: 140, atk: 150, def: 100, spd: 130 },
+    },
+  },
+  {
+    names: ['luffy', 'monkey d luffy'],
+    quote: "I'm gonna be King of the Pirates!",
+    hero: {
+      name: 'Luffy', classId: 'pirate', cls: 'Rubber Captain',
+      weapon: 'fists', body: 'bare', shield: false, cape: false, gear: 'strawhat', hair: 'short',
+      colors: palette({
+        skin: '#f3c9a6', hair: '#14141a', primary: '#2a5db0', secondary: '#f1c40f', accent: '#f3c9a6', boots: '#7a4a24',
+      }),
+      stats: { hp: 150, atk: 150, def: 90, spd: 120 },
+    },
+  },
+  {
+    names: ['zoro', 'roronoa zoro'],
+    quote: 'Nothing happened.',
+    hero: {
+      name: 'Zoro', classId: 'swordsman', cls: 'Three-Sword Style',
+      weapon: 'sword', body: 'gi', shield: false, cape: false, gear: 'headband', hair: 'spiky',
+      colors: palette({
+        skin: '#e8b48f', hair: '#3f9d4a', primary: '#e8e8e0', secondary: '#3f9d4a', accent: '#1b1b1b',
+        pants: '#1f1f1f', boots: '#1b1b1b',
+      }),
+      stats: { hp: 135, atk: 155, def: 110, spd: 115 },
+    },
+  },
+  {
+    names: ['mario', 'super mario'],
+    quote: "It's-a me, Mario!",
+    hero: {
+      name: 'Mario', classId: 'plumber', cls: 'Plumber',
+      weapon: 'fists', body: 'leather', shield: false, cape: false, gear: 'cap', hair: 'short', stache: true,
+      colors: palette({
+        skin: '#f3c9a6', hair: '#5a3a22', primary: '#d63031', secondary: '#2b4fb3', accent: '#ffffff',
+        pants: '#2b4fb3', boots: '#5a3a22',
+      }),
+      stats: { hp: 120, atk: 110, def: 110, spd: 110 },
+    },
+  },
+  {
+    names: ['sonic', 'sonic the hedgehog'],
+    quote: 'Gotta go fast!',
+    hero: {
+      name: 'Sonic', classId: 'hedgehog', cls: 'Blue Blur',
+      weapon: 'fists', body: 'bare', shield: false, cape: false, gear: 'none', hair: 'spiky',
+      colors: palette({
+        skin: '#2b6cff', hair: '#1f4fd8', primary: '#2b6cff', secondary: '#f5d6b0', accent: '#ffffff', boots: '#d63031',
+      }),
+      stats: { hp: 100, atk: 120, def: 80, spd: 175 },
+    },
+  },
+  {
+    names: ['spider-man', 'spiderman', 'spider man'],
+    quote: 'With great power comes great responsibility.',
+    hero: {
+      name: 'Spider-Man', classId: 'webslinger', cls: 'Web-Slinger',
+      weapon: 'fists', body: 'leather', shield: false, cape: false, gear: 'fullmask', hair: 'bald',
+      colors: palette({
+        skin: '#d63031', primary: '#d63031', secondary: '#1f3fa8', accent: '#d63031', pants: '#1f3fa8', boots: '#d63031',
+      }),
+      stats: { hp: 120, atk: 125, def: 100, spd: 150 },
+    },
+  },
+  {
+    names: ['superman', 'clark kent'],
+    quote: 'Up, up and away!',
+    hero: {
+      name: 'Superman', classId: 'kryptonian', cls: 'Man of Steel',
+      weapon: 'fists', body: 'leather', shield: false, cape: true, gear: 'none', hair: 'short',
+      colors: palette({
+        skin: '#f3c9a6', hair: '#14141a', primary: '#2f6fdc', secondary: '#d63031', accent: '#f3c9a6',
+        pants: '#2f6fdc', boots: '#d63031',
+      }),
+      stats: { hp: 165, atk: 165, def: 150, spd: 140 },
+    },
+  },
+  {
+    names: ['iron man', 'ironman', 'tony stark'],
+    quote: 'I am Iron Man.',
+    hero: {
+      name: 'Iron Man', classId: 'armored', cls: 'Armored Avenger',
+      weapon: 'fists', body: 'armor', shield: false, cape: false, gear: 'helmet', hair: 'short',
+      colors: palette({
+        skin: '#f3c9a6', primary: '#c0392b', secondary: '#f1c40f', accent: '#f1c40f',
+        pants: '#c0392b', boots: '#d4a017', metal: '#c0392b',
+      }),
+      stats: { hp: 130, atk: 150, def: 130, spd: 110 },
+    },
+  },
+  {
+    names: ['pikachu'],
+    quote: 'Pika pika!',
+    hero: {
+      name: 'Pikachu', classId: 'electric', cls: 'Electric Mouse',
+      weapon: 'fists', body: 'bare', shield: false, cape: false, gear: 'ears', hair: 'bald',
+      colors: palette({ skin: '#f7d02c', primary: '#f7d02c', secondary: '#c58b2a', accent: '#f7d02c', boots: '#f7d02c' }),
+      stats: { hp: 95, atk: 130, def: 80, spd: 160 },
+    },
+  },
+  {
+    names: ['mega man', 'megaman', 'rockman'],
+    quote: "Let's go, Mega Buster!",
+    hero: {
+      name: 'Mega Man', classId: 'robot', cls: 'Blue Bomber',
+      weapon: 'fists', body: 'armor', shield: false, cape: false, gear: 'helmet', hair: 'bald',
+      colors: palette({
+        skin: '#f3c9a6', primary: '#2f6fdc', secondary: '#7ec8ff', accent: '#7ec8ff',
+        pants: '#2f6fdc', boots: '#2f6fdc', metal: '#2f6fdc',
+      }),
+      stats: { hp: 120, atk: 135, def: 110, spd: 125 },
+    },
+  },
+  {
+    names: ['samus', 'samus aran'],
+    quote: 'The last Metroid is in captivity.',
+    hero: {
+      name: 'Samus Aran', classId: 'bounty', cls: 'Bounty Hunter',
+      weapon: 'fists', body: 'armor', shield: false, cape: false, gear: 'helmet', hair: 'bald',
+      colors: palette({
+        skin: '#f3c9a6', primary: '#e8892b', secondary: '#2ecc71', accent: '#e8892b',
+        pants: '#e8892b', boots: '#c0661a', metal: '#e8892b',
+      }),
+      stats: { hp: 135, atk: 140, def: 135, spd: 110 },
+    },
+  },
+  {
+    names: ['harry potter', 'harry'],
+    quote: 'Expecto Patronum!',
+    hero: {
+      name: 'Harry Potter', classId: 'wizard-student', cls: 'Boy Who Lived',
+      weapon: 'staff', body: 'robe', shield: false, cape: false, gear: 'none', hair: 'short', glasses: true,
+      colors: palette({
+        skin: '#f0cfae', hair: '#14141a', primary: '#1b1b2a', secondary: '#a31621', accent: '#f5c542',
+        pants: '#2b2b3a', boots: '#1b1b1b',
+      }),
+      stats: { hp: 105, atk: 145, def: 90, spd: 115 },
+    },
+  },
+  {
+    names: ['kratos', 'ghost of sparta'],
+    quote: 'Boy.',
+    hero: {
+      name: 'Kratos', classId: 'spartan', cls: 'Ghost of Sparta',
+      weapon: 'axe', body: 'bare', shield: false, cape: false, gear: 'none', hair: 'bald',
+      colors: palette({
+        skin: '#d9d2c5', primary: '#5a3a22', secondary: '#b0342c', accent: '#b0342c', boots: '#3a2a1e', metal: '#9aa4b2',
+      }),
+      stats: { hp: 160, atk: 165, def: 125, spd: 90 },
+    },
+  },
+  {
+    names: ['cloud strife', 'cloud'],
+    quote: 'Not interested.',
+    hero: {
+      name: 'Cloud Strife', classId: 'soldier', cls: 'Ex-SOLDIER',
+      weapon: 'sword', body: 'armor', shield: false, cape: false, gear: 'none', hair: 'spiky',
+      colors: palette({
+        skin: '#f3c9a6', hair: '#f1d65a', primary: '#2a3a6e', secondary: '#7a7f8c', accent: '#a29bfe',
+        pants: '#2a3a6e', boots: '#3a2a1e',
+      }),
+      stats: { hp: 140, atk: 160, def: 110, spd: 110 },
+    },
+  },
 ];
+
+// The parts the sprite rig can draw. src/main/hero-design.js keeps its own copy for validating
+// designs from Claude: keep both in sync (tools/check-roster.mjs compares them).
+// `vader` is left out of the designable gear on purpose: it is reserved for Darth Vader.
+export const RIG = {
+  weapon: ['sword', 'daggers', 'staff', 'hammer', 'axe', 'spear', 'scythe', 'bow', 'fists'],
+  body: ['armor', 'leather', 'robe', 'bare', 'gi'],
+  gear: ['none', 'helmet', 'plume', 'wizard', 'hood', 'mask', 'headband', 'crown', 'feather', 'strawhat', 'cap', 'fullmask', 'ears'],
+  hair: ['short', 'long', 'spiky', 'bald', 'ponytail'],
+  colors: ['skin', 'hair', 'primary', 'secondary', 'accent', 'pants', 'boots', 'metal'],
+};
 
 const SUMMON_MAX_WORDS = 5; // "summon" + up to 4 words, for names that are not famous characters
 const MAX_NAME_LENGTH = 40;
 
 const titleCase = (text) => text.replace(/\b[a-z]/g, (c) => c.toUpperCase());
 const normalize = (text) => text.toLowerCase().replace(/[^a-z0-9\s'.-]/g, ' ').replace(/\s+/g, ' ').trim();
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Longest alias first, so "summon cloud strife" is not taken for "summon cloud".
+const ALIASES = CHARACTERS.flatMap((character) => character.names.map((alias) => ({ alias, character })))
+  .sort((a, b) => b.alias.length - a.alias.length);
 
 function summonSeed(character, name) {
   return character?.seed || `summon:${name}`;
@@ -156,21 +347,19 @@ function summonSeed(character, name) {
  * The character asked for in `text`, or null.
  * Famous characters match anywhere ("please summon Batman!"). Any other name needs a
  * short message that starts with "summon" ("summon Captain Jack Sparrow").
- * @returns {{seed: string, name: string, quote?: string} | null}
+ * @returns {{seed: string, name: string, quote?: string, famous: boolean} | null}
  */
 export function findSummon(text) {
   const words = normalize(text);
-  for (const character of CHARACTERS) {
-    for (const alias of character.names) {
-      if (new RegExp(`\\bsummon (?:the )?${alias}\\b`).test(words)) {
-        return { seed: summonSeed(character, character.names[0]), name: character.hero.name, quote: character.quote };
-      }
+  for (const { alias, character } of ALIASES) {
+    if (new RegExp(`\\bsummon (?:the )?${escapeRegExp(alias)}\\b`).test(words)) {
+      return { seed: summonSeed(character, character.names[0]), name: character.hero.name, quote: character.quote, famous: true };
     }
   }
   if (!words.startsWith('summon ') || words.split(' ').length > SUMMON_MAX_WORDS) return null;
   const name = words.slice('summon '.length).replace(/^the /, '').replace(/ please$/, '').trim();
   if (!name || name.length > MAX_NAME_LENGTH || !/[a-z0-9]/.test(name)) return null;
-  return { seed: summonSeed(null, name), name: titleCase(name) };
+  return { seed: summonSeed(null, name), name: titleCase(name), famous: false };
 }
 
 /** Hand-built hero for a seed, if it belongs to a famous character. */
@@ -178,9 +367,39 @@ function characterFor(seed) {
   return CHARACTERS.find((c) => summonSeed(c, c.names[0]) === seed) || null;
 }
 
-export function generateHero(seed) {
+const HEX = /^#[0-9a-f]{6}$/i;
+const inList = (list, v) => typeof v === 'string' && list.includes(v);
+
+/**
+ * Hero built from a design that the main process validated (see src/main/hero-design.js).
+ * The checks are repeated here so a bad object can never reach the sprite; null if anything is off.
+ */
+function heroFromDesign(seed, d) {
+  if (!d || typeof d !== 'object') return null;
+  if (!inList(RIG.weapon, d.weapon) || !inList(RIG.body, d.body) || !inList(RIG.gear, d.gear) || !inList(RIG.hair, d.hair)) return null;
+  if (!d.colors || !RIG.colors.every((k) => HEX.test(d.colors[k]))) return null;
+  const st = d.stats || {};
+  if (!['hp', 'atk', 'def', 'spd'].every((k) => Number.isFinite(st[k]))) return null;
+  const colors = Object.fromEntries(RIG.colors.map((k) => [k, d.colors[k]]));
+  if (d.signatureGlow !== undefined && !HEX.test(d.signatureGlow)) return null;
+  return {
+    seed, secret: true, name: titleCase(seed.slice('summon:'.length)), classId: 'summoned',
+    cls: typeof d.cls === 'string' ? d.cls.slice(0, 24) : 'Summoned',
+    weapon: d.weapon, body: d.body, gear: d.gear, hair: d.hair,
+    shield: d.shield === true, cape: d.cape === true, stache: d.stache === true, glasses: d.glasses === true,
+    ...(d.signatureGlow ? { signatureGlow: d.signatureGlow } : {}),
+    colors,
+    stats: { hp: st.hp, atk: st.atk, def: st.def, spd: st.spd },
+  };
+}
+
+export function generateHero(seed, design) {
   const character = characterFor(seed);
   if (character) return { seed, secret: true, ...character.hero };
+  if (design && seed.startsWith('summon:')) {
+    const designed = heroFromDesign(seed, design);
+    if (designed) return designed;
+  }
   const hero = generateRandomHero(seed);
   // Any other summoned name keeps its generated looks but wears the name it was summoned by.
   if (seed.startsWith('summon:')) return { ...hero, secret: true, name: titleCase(seed.slice('summon:'.length)) };

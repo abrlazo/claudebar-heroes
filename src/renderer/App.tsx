@@ -114,6 +114,15 @@ function AppShell() {
       if (agentCount > 0) setStatus(`⚔ ${agentCount} agent${agentCount > 1 ? 's' : ''} working…`);
       return undefined;
     }
+  // A design that arrives for the current seed (summon) only changes how the hero looks.
+  const designAt = ws?.heroDesign?.at;
+  const firstDesign = useRef(true);
+  useEffect(() => {
+    if (firstDesign.current) { firstDesign.current = false; return; }
+    if (ws) game.configure({ hero: heroFor(ws) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the design changes
+  }, [designAt]);
+
     if (agents.running) {
       wasAgentsRunning.current = true;
       setStatus(agentCount > 0 ? `⚔ ${agentCount} agent${agentCount > 1 ? 's' : ''} working…` : 'Spawning agents…');
@@ -128,7 +137,7 @@ function AppShell() {
 
   // Level prestige (weapon glow from 10, aura from 15) follows the hero's level.
   const level = ws ? levelFor(xpFor(ws)) : 0;
-  useEffect(() => { game.configure({ level }); }, [game, level, wsId, heroSeed]);
+  useEffect(() => { game.configure({ level }); }, [game, level, wsId, heroSeed, designAt]);
 
   const map = ws?.map;
   useEffect(() => { if (map) game.configure({ mapId: map }); }, [map, game]);

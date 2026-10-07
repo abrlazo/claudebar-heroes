@@ -176,6 +176,14 @@ function drawHero(b, hero, frame, glow = null) {
   }
   drawHair(rect, hero, hx, hy, frame);
   drawGear(rect, hero, hx, hy);
+  if (hero.stache) rect(hx + 4, hy + 4, 3, 1, '#3b2418');
+  if (hero.glasses) {
+    const rim = '#1b1b2f';
+    rect(hx + 4, hy + 1, 3, 1, rim);
+    rect(hx + 4, hy + 4, 3, 1, rim);
+    rect(hx + 4, hy + 2, 1, 2, rim);
+    rect(hx + 6, hy + 2, 1, 2, rim);
+  }
 
   // Front arm + weapon
   const armLen = hero.weapon === 'fists' && frame.swing === 'strike' ? 6 : 4;
@@ -194,7 +202,7 @@ function angleFor(hero, frame, back) {
 
 function drawHair(rect, hero, hx, hy, frame) {
   const col = hero.colors.hair;
-  if (hero.hair === 'bald' || hero.gear === 'helmet' || hero.gear === 'plume' || hero.gear === 'hood' || hero.gear === 'vader') return;
+  if (hero.hair === 'bald' || hero.gear === 'helmet' || hero.gear === 'plume' || hero.gear === 'hood' || hero.gear === 'vader' || hero.gear === 'fullmask') return;
   rect(hx, hy - 1, 7, 2, col);
   rect(hx, hy + 1, 2, 2, col);
   rect(hx + 6, hy, 1, 1, col);
@@ -269,6 +277,32 @@ function drawGear(rect, hero, hx, hy) {
       rect(hx + 3, hy - 3, 1, 1, '#f5c542');
       rect(hx + 5, hy - 3, 1, 1, '#f5c542');
       rect(hx + 3, hy - 2, 1, 1, c.accent);
+      break;
+    case 'strawhat':
+      rect(hx, hy - 3, 7, 2, '#e8c15a');                       // crown
+      rect(hx - 3, hy - 1, 13, 1, '#e8c15a');                  // brim
+      rect(hx, hy - 1, 7, 1, '#c0392b');                       // red band
+      break;
+    case 'cap':
+      rect(hx - 1, hy - 2, 8, 3, c.primary);
+      rect(hx + 5, hy + 1, 4, 1, shade(c.primary, -0.25));     // peak
+      rect(hx + 3, hy - 2, 2, 2, '#ffffff');                   // badge
+      break;
+    case 'fullmask':
+      rect(hx, hy - 1, 7, 7, c.primary);
+      rect(hx, hy + 5, 7, 1, shade(c.primary, -0.2));
+      rect(hx + 1, hy, 1, 5, shade(c.primary, -0.35));         // web lines
+      rect(hx + 3, hy - 1, 1, 3, shade(c.primary, -0.35));
+      rect(hx + 1, hy + 3, 5, 1, shade(c.primary, -0.35));
+      rect(hx + 4, hy + 1, 3, 3, '#14141c');                   // eye rim
+      rect(hx + 4, hy + 2, 2, 2, '#ffffff');                   // eye lens
+      break;
+    case 'ears':
+      rect(hx + 1, hy - 4, 1, 3, c.skin);
+      rect(hx + 4, hy - 4, 1, 3, c.skin);
+      rect(hx + 1, hy - 4, 1, 1, '#1b1b1b');                  // black tips
+      rect(hx + 4, hy - 4, 1, 1, '#1b1b1b');
+      rect(hx + 4, hy + 4, 1, 1, '#e0412f');                   // red cheek
       break;
     case 'feather':
       rect(hx - 1, hy - 2, 8, 3, c.primary);

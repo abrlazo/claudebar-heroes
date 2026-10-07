@@ -8,17 +8,22 @@ import type { Hero, Workspace } from '../types';
 const heroes = new Map<string, Hero>();
 const portraits = new Map<string, string>();
 
+// A design that arrives after the seed changes the look, so it is part of the key.
+const cacheKey = (ws: Workspace) => (ws.heroDesign ? `${ws.heroSeed}#${ws.heroDesign.at}` : ws.heroSeed);
+
 /** The deterministic hero for a workspace (null when there is no workspace). */
 export function heroFor(ws: Workspace): Hero;
 export function heroFor(ws: Workspace | null): Hero | null;
 export function heroFor(ws: Workspace | null): Hero | null {
   if (!ws) return null;
-  if (!heroes.has(ws.heroSeed)) heroes.set(ws.heroSeed, generateHero(ws.heroSeed) as Hero);
-  return heroes.get(ws.heroSeed) as Hero;
+  const key = cacheKey(ws);
+  if (!heroes.has(key)) heroes.set(key, generateHero(ws.heroSeed, ws.heroDesign ?? undefined) as Hero);
+  return heroes.get(key) as Hero;
 }
 
 /** Portrait data URL for a workspace's hero. */
 export function portraitFor(ws: Workspace): string {
-  if (!portraits.has(ws.heroSeed)) portraits.set(ws.heroSeed, heroPortrait(heroFor(ws)));
-  return portraits.get(ws.heroSeed) as string;
+  const key = cacheKey(ws);
+  if (!portraits.has(key)) portraits.set(key, heroPortrait(heroFor(ws)));
+  return portraits.get(key) as string;
 }
