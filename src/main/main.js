@@ -6,6 +6,8 @@ const {
 const settings = require('./settings');
 const claude = require('./claude');
 const agents = require('./agents');
+const agentDefinitions = require('./agent-definitions');
+const commandCatalog = require('./command-catalog');
 
 // The window is a transparent, frameless box that holds the hero strip. It
 // can be dragged anywhere (even over the taskbar) and remembers its spot.
@@ -18,6 +20,9 @@ const MARGIN = 8;
 
 // DevTools open on launch only for `npm run dev` (--dev); otherwise use the tray menu.
 const isDev = process.argv.includes('--dev');
+const PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions'];
+// A mode from the renderer only counts when it is on the list; otherwise the saved one applies.
+const safeMode = (mode) => (PERMISSION_MODES.includes(mode) ? mode : settings.get().permissionMode);
 const TOGGLE_SHORTCUT = 'CommandOrControl+Shift+Space';
 
 let win = null;
@@ -190,8 +195,13 @@ function registerIpc() {
 
   ipcMain.handle('workspace:select', (_e, id) => (mainHandle?.running ? settings.get() : settings.selectWorkspace(id)));
   // Any workspace can be removed, except the one Claude is working in right now.
+  const forgetWorkspace = (id) => {
+    const ws = settings.get().workspaces.find((w) => w.id === id);
+    if (ws) claudeCommandCache.delete(ws.path);
+    return settings.removeWorkspace(id);
+  };
   ipcMain.handle('workspace:remove', (_e, id) => (
-    mainHandle?.running && id === runningWsId ? settings.get() : settings.removeWorkspace(id)
+    mainHandle?.running && id === runningWsId ? settings.get() : forgetWorkspace(id)
   ));
   // A summoned character is accepted only with a well-formed seed (Vader's legacy seed, or
   // "summon:<name>" with a short plain name); anything else gets a random hero.
@@ -314,47 +324,86 @@ function registerIpc() {
   ipcMain.handle('claude:info', () => ({ bin: claude.resolveClaudeBinary() }));
 
   ipcMain.handle('settings:update', (_e, patch) => {
-    if (patch.panelHeight !== undefined) {
+    if (!patch || typeof patch !== 'object') return settings.get();
+    const allowed = {};
+    if (Number.isFinite(patch.panelHeight)) {
       panelHeight = Math.max(300, Math.min(1000, patch.panelHeight));
       applyBounds();
-      // Only persist panel height on explicit update, not every mousemove
-      if (patch.panelHeight) return settings.set({ panelHeight });
+      allowed.panelHeight = panelHeight;
     }
-    return settings.get();
+    // Other preferences the renderer may persist (the permission mode is read by every run).
+    if (PERMISSION_MODES.includes(patch.permissionMode)) allowed.permissionMode = patch.permissionMode;
+    if (patch.theme === 'dark' || patch.theme === 'light') allowed.theme = patch.theme;
+    return Object.keys(allowed).length ? settings.set(allowed) : settings.get();
   });
 
-  ipcMain.handle('agents:spawn', (_e, { wsId, count, prompt, cwd, permissionMode }) => {
+  // Everything that can follow a "/" in the chat (agents, skills, custom commands), for the suggestion popup.
+  // Claude's own command list is cached per project for a minute (and shared by concurrent callers)
+  // so the popup opens instantly; reading it spawns a short-lived `claude` (no model call).
+  const claudeCommandCache = new Map(); // project path -> { at, promise }
+  const claudeCommandsFor = (projectPath) => {
+    const hit = claudeCommandCache.get(projectPath);
+    if (hit && Date.now() - hit.at < 60000) return hit.promise;
+    const promise = claude.listCommands(projectPath);
+    claudeCommandCache.set(projectPath, { at: Date.now(), promise });
+    promise.then((list) => { if (!list) claudeCommandCache.delete(projectPath); });
+    return promise;
+  };
+  ipcMain.handle('commands:list', async (_e, wsId) => {
     const ws = settings.get().workspaces.find((w) => w.id === wsId);
-    if (!ws) return null;
-
-    const agentList = [];
-    for (let i = 0; i < count; i++) {
-      const agent = settings.newAgent(`Agent ${i + 1}`, i);
-      settings.addAgent(wsId, agent);
-      agentList.push(agent);
-
-      agents.spawn({
-        wsId,
-        agentId: agent.id,
-        agentName: agent.name,
-        prompt,
-        cwd,
-        permissionMode,
-      }, (event) => {
-        win?.webContents.send('agent:event', event);
-      });
-    }
-    return agentList;
+    if (!ws) return [];
+    return commandCatalog.listCatalog(ws.path, await claudeCommandsFor(ws.path));
   });
 
-  // Follow-up message to an existing agent: resume its Claude session.
-  ipcMain.on('agents:message', (_e, { wsId, agentId, sessionId, prompt, cwd, permissionMode }) => {
-    if (!prompt || !sessionId) return;
+  // The agents a project can invoke with "/<name>": markdown files under .claude/agents/.
+  ipcMain.handle('agents:definitions', (_e, wsId) => {
+    const ws = settings.get().workspaces.find((w) => w.id === wsId);
+    return ws ? agentDefinitions.listDefinitions(ws.path) : [];
+  });
+
+  // "/<agent> <task>": runs ONE agent in its own process (its own tab and orb in the UI).
+  // The name must match a definition under .claude/agents/; anything else is refused.
+  ipcMain.handle('agents:run', (_e, { wsId, definitionName, displayName, task, permissionMode }) => {
+    const ws = settings.get().workspaces.find((w) => w.id === wsId);
+    if (!ws) return { error: 'Project not found.' };
+    if (!task || typeof task !== 'string') return { error: 'Tell the agent what to do.' };
+    if (!fs.existsSync(ws.path)) return { error: `Project folder not found: ${ws.path}` };
+    const definition = agentDefinitions.findDefinition(ws.path, definitionName);
+    if (!definition) return { error: `No agent named "${definitionName}" in .claude/agents.` };
+    const name = typeof displayName === 'string' && displayName.trim() ? displayName.trim().slice(0, 40) : definition.name;
+
+    const agent = settings.newAgent(name, 0);
+    settings.addAgent(wsId, agent);
     agents.spawn({
-      wsId, agentId, agentName: 'Agent', prompt, cwd, permissionMode, sessionId,
+      wsId,
+      agentId: agent.id,
+      agentName: agent.name,
+      definitionName: definition.name,
+      prompt: task,
+      cwd: ws.path,
+      permissionMode: safeMode(permissionMode),
     }, (event) => {
       win?.webContents.send('agent:event', event);
     });
+    return { agent, definitionName: definition.name };
+  });
+
+  // Follow-up message to an existing agent: resume its Claude session, as the same agent.
+  ipcMain.on('agents:message', (_e, { wsId, agentId, sessionId, definitionName, prompt, permissionMode } = {}) => {
+    if (!prompt || typeof sessionId !== 'string' || !sessionId) return;
+    const ws = settings.get().workspaces.find((w) => w.id === wsId);
+    if (!ws) return;
+    const emit = (event) => win?.webContents.send('agent:event', event);
+    const definition = definitionName ? agentDefinitions.findDefinition(ws.path, definitionName) : null;
+    if (definitionName && !definition) {
+      // The file was deleted or renamed: don't silently resume as a plain run under the agent's name.
+      emit({ agentId, type: 'error', message: `Agent definition "${definitionName}" is gone from .claude/agents.` });
+      return;
+    }
+    agents.spawn({
+      wsId, agentId, agentName: 'Agent', definitionName: definition?.name ?? null, prompt, cwd: ws.path,
+      permissionMode: safeMode(permissionMode), sessionId,
+    }, emit);
   });
 
   ipcMain.handle('agents:cancel', (_e, { wsId, agentId }) => {

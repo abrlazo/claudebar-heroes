@@ -52,7 +52,7 @@ function resolveClaudeBinary() {
  * @param {(event: object) => void} emit
  * @returns {{cancel: function, running: boolean}} handle
  */
-function run({ prompt, cwd, sessionId, permissionMode, model }, emit) {
+function run({ prompt, cwd, sessionId, permissionMode, model, agent }, emit) {
   const args = [
     '-p',
     '--output-format', 'stream-json',
@@ -62,6 +62,8 @@ function run({ prompt, cwd, sessionId, permissionMode, model }, emit) {
   ];
   if (sessionId) args.push('--resume', sessionId);
   if (model) args.push('--model', model);
+  // Run as a named agent from .claude/agents (the caller has already validated the name).
+  if (agent && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(agent)) args.push('--agent', agent);
 
   const bin = resolveClaudeBinary();
   emit({ type: 'start' });
@@ -99,6 +101,7 @@ function run({ prompt, cwd, sessionId, permissionMode, model }, emit) {
 
   let buffer = '';
   let stderr = '';
+  const state = { streamedText: false };
 
   child.stdout.on('data', (chunk) => {
     buffer += chunk.toString();
@@ -108,7 +111,7 @@ function run({ prompt, cwd, sessionId, permissionMode, model }, emit) {
       buffer = buffer.slice(nl + 1);
       if (!line) continue;
       try {
-        handleMessage(JSON.parse(line), emit);
+        handleMessage(JSON.parse(line), emit, state);
       } catch {
         // Ignore non-JSON lines.
       }
@@ -136,7 +139,9 @@ function run({ prompt, cwd, sessionId, permissionMode, model }, emit) {
   return handle;
 }
 
-function handleMessage(msg, emit) {
+// `state.streamedText` tells an assistant message whose text already arrived as deltas apart from
+// one that did not: built-in commands (/context, /usage...) answer with a complete message and no deltas.
+function handleMessage(msg, emit, state) {
   switch (msg.type) {
     case 'system':
       if (msg.subtype === 'init') emit({ type: 'session', sessionId: msg.session_id, model: msg.model });
@@ -151,6 +156,7 @@ function handleMessage(msg, emit) {
       } else if (ev?.type === 'message_delta' && ev.usage) {
         emit({ type: 'usage', usage: normalizeUsage(ev.usage) });
       } else if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+        state.streamedText = true;
         emit({ type: 'text', text: ev.delta.text });
       } else if (ev?.type === 'content_block_delta' && ev.delta?.type === 'thinking_delta') {
         emit({ type: 'thinking', text: ev.delta.thinking });
@@ -161,12 +167,16 @@ function handleMessage(msg, emit) {
     }
 
     case 'assistant':
-      // Text already arrived as deltas; only pick out tool calls here.
+      // Normal replies already arrived as deltas, so only tool calls are picked out here;
+      // text is emitted only when nothing was streamed (command output).
       for (const block of msg.message?.content || []) {
         if (block.type === 'tool_use') {
           emit({ type: 'tool', name: block.name, summary: summarizeToolInput(block.input) });
+        } else if (block.type === 'text' && block.text && !state.streamedText) {
+          emit({ type: 'text', text: block.text });
         }
       }
+      state.streamedText = false;
       break;
 
     case 'result':
@@ -198,4 +208,61 @@ function summarizeToolInput(input = {}) {
   return text.length > 80 ? `${text.slice(0, 77)}...` : text;
 }
 
-module.exports = { run, resolveClaudeBinary };
+/**
+ * The slash commands Claude itself recognises in headless mode, as [{ name, description, argumentHint }],
+ * or null if they could not be read. Uses Claude's own `initialize` request: no model call, no session.
+ */
+function listCommands(cwd, timeoutMs = 6000) {
+  return new Promise((resolve) => {
+    let child;
+    let settled = false;
+    let buffer = '';
+    const done = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        if (child?.pid) {
+          if (isWin) spawn('taskkill', ['/pid', String(child.pid), '/t', '/f']);
+          else child.kill('SIGTERM');
+        }
+      } catch { /* already gone */ }
+      resolve(value);
+    };
+    const timer = setTimeout(() => done(null), timeoutMs);
+    try {
+      child = spawn(resolveClaudeBinary(), ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'], {
+        cwd, env: childEnv(), shell: isWin,
+      });
+    } catch {
+      done(null);
+      return;
+    }
+    child.on('error', () => done(null));
+    child.on('close', () => done(null));
+    child.stderr.resume(); // drain it so a chatty child can't block
+    child.stdout.on('data', (chunk) => {
+      buffer += chunk.toString();
+      let nl;
+      while ((nl = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'control_response' && msg.response?.request_id === 'cmd-list') {
+            const commands = msg.response?.response?.commands;
+            done(Array.isArray(commands)
+              ? commands.map((c) => ({ name: c.name, description: c.description || '', argumentHint: c.argumentHint || '' }))
+              : null);
+            return;
+          }
+        } catch { /* not JSON */ }
+      }
+    });
+    child.stdin.on('error', () => done(null));
+    child.stdin.write(`${JSON.stringify({ type: 'control_request', request_id: 'cmd-list', request: { subtype: 'initialize' } })}\n`);
+  });
+}
+
+module.exports = { run, resolveClaudeBinary, listCommands };

@@ -4,9 +4,9 @@ const settings = require('./settings');
 // Manages multiple concurrent Claude agents
 const agents = new Map(); // agentId -> { handle, emit }
 
-// Starts an agent. Pass `sessionId` to continue an earlier run of the same agent
+// Starts an agent (`definitionName` = the .claude/agents file it runs as). Pass `sessionId` to continue an earlier run of the same agent
 // (a follow-up message) instead of starting a fresh conversation.
-function spawn({ wsId, agentId, agentName, prompt, cwd, permissionMode, sessionId = null }, onEvent) {
+function spawn({ wsId, agentId, agentName, definitionName = null, prompt, cwd, permissionMode, sessionId = null }, onEvent) {
   if (agents.has(agentId)) {
     onEvent({ type: 'error', message: `Agent ${agentName} is already running` });
     return;
@@ -18,7 +18,7 @@ function spawn({ wsId, agentId, agentName, prompt, cwd, permissionMode, sessionI
 
   settings.updateAgent(wsId, agentId, { status: 'running', startTime: Date.now(), sessionId });
 
-  const handle = claude.run({ prompt, cwd, sessionId, permissionMode }, (event) => {
+  const handle = claude.run({ prompt, cwd, sessionId, permissionMode, agent: definitionName }, (event) => {
     if (event.type === 'session') {
       settings.updateAgent(wsId, agentId, { sessionId: event.sessionId });
     } else if (event.type === 'usage') {

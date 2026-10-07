@@ -35,8 +35,10 @@ contextBridge.exposeInMainWorld('bar', {
   sendGeneralChat: (prompt, model) => ipcRenderer.send('general-chat:send', { prompt, model }),
   cancelGeneralChat: () => ipcRenderer.send('general-chat:cancel'),
 
-  spawnAgents: (wsId, count, prompt, cwd, permissionMode) => ipcRenderer.invoke('agents:spawn', { wsId, count, prompt, cwd, permissionMode }),
-  messageAgent: (wsId, agentId, sessionId, prompt, cwd, permissionMode) => ipcRenderer.send('agents:message', { wsId, agentId, sessionId, prompt, cwd, permissionMode }),
+  commandCatalog: (wsId) => ipcRenderer.invoke('commands:list', wsId),
+  agentDefinitions: (wsId) => ipcRenderer.invoke('agents:definitions', wsId),
+  runAgent: (wsId, definitionName, displayName, task, permissionMode) => ipcRenderer.invoke('agents:run', { wsId, definitionName, displayName, task, permissionMode }),
+  messageAgent: (wsId, agentId, sessionId, definitionName, prompt, cwd, permissionMode) => ipcRenderer.send('agents:message', { wsId, agentId, sessionId, definitionName, prompt, cwd, permissionMode }),
   cancelAgent: (wsId, agentId) => ipcRenderer.invoke('agents:cancel', { wsId, agentId }),
   listAgents: (wsId) => ipcRenderer.invoke('agents:list', wsId),
 
