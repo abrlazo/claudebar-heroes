@@ -114,15 +114,6 @@ function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run when the hero or project changes
   }, [wsId, heroSeed]);
 
-  // HUD status for agent-only work (the main chat sets its own status per event).
-  const agentCount = agents.agents.filter((a) => a.status === 'running').length;
-  const wasAgentsRunning = useRef(false);
-  useEffect(() => {
-    if (run.running) {
-      // Agents Claude delegated to run inside the Expedition run: show their count when it changes.
-      if (agentCount > 0) setStatus(`⚔ ${agentCount} agent${agentCount > 1 ? 's' : ''} working…`);
-      return undefined;
-    }
   // A design that arrives for the current seed (summon) only changes how the hero looks.
   const designAt = ws?.heroDesign?.at;
   const firstDesign = useRef(true);
@@ -132,6 +123,15 @@ function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the design changes
   }, [designAt]);
 
+  // HUD status for agent-only work (the main chat sets its own status per event).
+  const agentCount = agents.agents.filter((a) => a.status === 'running').length;
+  const wasAgentsRunning = useRef(false);
+  useEffect(() => {
+    if (run.running) {
+      // Agents Claude delegated to run inside the Expedition run: show their count when it changes.
+      if (agentCount > 0) setStatus(`⚔ ${agentCount} agent${agentCount > 1 ? 's' : ''} working…`);
+      return undefined;
+    }
     if (agents.running) {
       wasAgentsRunning.current = true;
       setStatus(agentCount > 0 ? `⚔ ${agentCount} agent${agentCount > 1 ? 's' : ''} working…` : 'Spawning agents…');
