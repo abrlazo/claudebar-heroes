@@ -6,15 +6,20 @@
 // Claude is working. Drawn at half resolution so it stays chunky like the rest
 // of the pixel art. Colours come from prestige.js.
 
-const W = 56;
+const W = 30;
 const H = 55;
 // Where the hero's body sits in aura-canvas pixels. The hero sprite (32x30) is
 // drawn left-of-centre (torso and head span x 9-16, feet at y 29) and the aura
-// canvas starts 12px left of and 22px above the sprite, so: x = 12 + 12.5, y = 22 + n.
-const CX = 24.5;    // centre of the body
+// canvas starts 3px left of and 22px above the sprite, so: x = 3 + 12.5, y = 22 + n.
+// Every horizontal extent below derives from BODY_W so the aura hugs the body.
+const BODY_W = 9;           // hero body (head, torso, arms) in sprite px
+const HALF = BODY_W * 0.6;  // flame centres spread +-HALF around CX (5.4)
+const LIGHT_MAX = 10;       // lightning never strays further than this from CX
+const BURST_RX = 10;        // power-up ring half width
+const CX = 15.5;    // centre of the body
 const BASE = 51;    // feet
 const BODY_Y = 42;  // middle of the body (head top to feet)
-const SPIKES = 7;
+const SPIKES = 5;
 const BURST_SECONDS = 0.9;
 
 const hexToRgb = (hex) => {
@@ -48,18 +53,18 @@ export function createAura(canvas) {
   function drawSpikes(surge) {
     const scale = (0.4 + 0.6 * power) * surge;
     const layers = [
-      { width: 8, height: 1, white: 0, alpha: 0.5 },
-      { width: 6, height: 0.68, white: 0.45, alpha: 0.72 },
-      { width: 3, height: 0.4, white: 0.85, alpha: 0.9 },
+      { width: 5, height: 1, white: 0, alpha: 0.5 },
+      { width: 4, height: 0.68, white: 0.45, alpha: 0.72 },
+      { width: 2, height: 0.4, white: 0.85, alpha: 0.9 },
     ];
     for (const layer of layers) {
       ctx.fillStyle = rgba(mixWhite(rgb, layer.white), layer.alpha * (0.5 + 0.5 * power));
       for (let i = 0; i < SPIKES; i++) {
-        const x = CX - 16 + (i * 32) / (SPIKES - 1);
+        const x = CX - HALF + (i * 2 * HALF) / (SPIKES - 1);
         const centre = 1 - Math.abs(i - (SPIKES - 1) / 2) / ((SPIKES - 1) / 2); // 0 at the edges, 1 in the middle
         const flicker = 1 + 0.18 * Math.sin(time * 9 + i * 1.9) + 0.1 * Math.sin(time * 17 + i * 3.1);
         const h = (14 + 18 * centre) * scale * layer.height * flicker;
-        const sway = Math.sin(time * 5 + i) * 1.5;
+        const sway = Math.sin(time * 5 + i);
         ctx.beginPath();
         ctx.moveTo(x - layer.width / 2, BASE);
         ctx.lineTo(x + sway, BASE - h);
@@ -75,9 +80,9 @@ export function createAura(canvas) {
     while (sparkDebt >= 1 && sparks.length < 28) {
       sparkDebt -= 1;
       sparks.push({
-        x: CX + (Math.random() - 0.5) * 30,
+        x: CX + (Math.random() - 0.5) * BODY_W,
         y: BASE - 4 - Math.random() * 16,
-        vx: (Math.random() - 0.5) * 6,
+        vx: (Math.random() - 0.5) * 3,
         vy: -(14 + Math.random() * 16),
         life: 0.5 + Math.random() * 0.7,
         age: 0,
@@ -102,11 +107,12 @@ export function createAura(canvas) {
       if (boltIn <= 0 && !bolt) {
         boltIn = 0.5 + Math.random();
         const side = Math.random() < 0.5 ? -1 : 1;
-        let x = CX + side * (10 + Math.random() * 4);
+        let x = CX + side * (5 + Math.random() * 2);
         let y = 30 + Math.random() * 18;
         const points = [[x, y]];
         for (let i = 0; i < 5; i++) {
-          x += side * (1 + Math.random() * 3) * (Math.random() > 0.5 ? 1 : -0.4);
+          x += side * (0.3 + Math.random()) * (Math.random() > 0.5 ? 1 : -0.4);
+          x = Math.max(CX - LIGHT_MAX, Math.min(CX + LIGHT_MAX, x));
           y -= 3 + Math.random() * 3;
           points.push([x, y]);
         }
@@ -131,11 +137,11 @@ export function createAura(canvas) {
     ctx.strokeStyle = rgba(mixWhite(rgb, 0.4), 1 - p);
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.ellipse(CX, BODY_Y, p * 30, p * 24, 0, 0, Math.PI * 2);
+    ctx.ellipse(CX, BODY_Y, p * BURST_RX, p * 24, 0, 0, Math.PI * 2);
     ctx.stroke();
     ctx.fillStyle = rgba([255, 255, 255], 0.45 * (1 - p));
     ctx.beginPath();
-    ctx.ellipse(CX, BODY_Y, 16, 18, 0, 0, Math.PI * 2);
+    ctx.ellipse(CX, BODY_Y, 7, 18, 0, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -179,7 +185,7 @@ export function createAura(canvas) {
         else surge = 1 + 0.5 * (1 - burstT / BURST_SECONDS);
       }
       ctx.clearRect(0, 0, W, H);
-      const glow = ctx.createRadialGradient(CX, BODY_Y, 3, CX, BODY_Y, 24);
+      const glow = ctx.createRadialGradient(CX, BODY_Y, 2, CX, BODY_Y, BODY_W * 1.2);
       glow.addColorStop(0, rgba(rgb, 0.4 * power));
       glow.addColorStop(1, rgba(rgb, 0));
       ctx.fillStyle = glow;
