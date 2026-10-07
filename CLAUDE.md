@@ -42,6 +42,7 @@ The app spawns Claude Code headlessly (`claude -p --output-format stream-json`) 
 - Spawns single Claude process with streaming JSON output
 - Parses events (text and thinking deltas, tool calls, `turn` = input tokens at the start of a model call, `usage` = final tokens of a call, session info)
 - Converts Claude's event stream into UI-friendly event objects
+- Spots Claude's own delegations: an assistant `tool_use` named `Agent` (older: `Task`) with `input.subagent_type` also emits `{type:'subagent', phase:'start', toolUseId, agentType, description, prompt}`. Messages with `parent_tool_use_id` are work inside that subagent and become `phase:'event'` (`inner:'tool'|'text'`) instead of the chat's own tool lines/text (their stream events are skipped, so they don't touch the token gauge). `phase:'end'` comes from the matching `tool_result` (the "[Subagent hand-back]" frame is stripped), or, for a background agent whose tool_result is only a launch notice (`tool_use_result.isAsync`), from the `task_notification` system event
 
 **agents.js** - Agent processes
 - Manages concurrent Claude processes, one per invoked agent (`claude --agent <name>`)
@@ -102,15 +103,19 @@ The **selected workspace** (`settings.activeId`) is the orchestrator. It determi
 
 ### Agent Spawning
 
-The only way to start an agent is `/<agent-name> <task>` at the start of a message in the Expedition chat.
+The only way for the user to start an agent is `/<agent-name> <task>` at the start of a message in the Expedition chat. (When Claude itself delegates to a known agent, it is shown as an observed agent, see *Delegated agents* below.)
 
 1. `App.tsx` sees a message starting with `/` and asks the main process for the agents the project has (`bar.agentDefinitions` -> `agent-definitions.js`: markdown files under `.claude/agents/`, the project's and the user's).
 2. `parseAgentInvocation` (`lib/agents.ts`) accepts it only if the name matches one of those files (case-insensitive). **Anything else is not an agent**: skills (`/run`), other slash commands, built-in agents (`/Explore`), file paths (`/Users/...`) and text that merely contains an agent name all go to Claude as ordinary messages. There are no keyword triggers.
 3. `/<agent>` with no task asks for one and starts nothing. At most 4 agents work at the same time.
+
+**Chains**: `/a <task> && /b [task] [&& /c]` (`parseAgentChain` in `lib/agents.ts`, max `MAX_CHAIN_STEPS` = 3). Every step must be a known agent, otherwise it is not a chain and the text is handled as a single message. The first step starts as above; the rest are queued in `useAgents` (`chains`, keyed by the running agent, with the workspace it started in; not persisted, no tab or orb until they start). When an agent ends cleanly the next step starts in that workspace; its task is the step's own text, else (`handoffTask`) the previous agent's final message, or "Implement the findings in .claude/review.md" after `feature-reviewer` when the file exists (`bar.projectHasReview`, path taken from the workspace in main), else the chain stops with "no findings to implement". An error, non-zero exit, Stop, or closing the tab drops the rest with a meta message in the Expedition chat. If `MAX_AGENTS` are already running at hand-off, the chain stops with a message (it does not wait).
 4. `bar.runAgent` -> `agents:run` starts ONE Claude process: `claude -p ... --agent <name>`, in the project folder, with the permission mode chosen in the footer (headless runs cannot ask, so tools like Bash need *Accept edits* or *Bypass perms*).
 5. The agent gets a tab named after it (`gitama`, then `gitama 2` for a second run), its own log and a spirit orb. The user's `/<agent> <task>` line stays in the Expedition chat, the task is the first message in the agent's tab.
 
 **The "/" suggestion popup** (Expedition composer only): typing `/` at the start of the text opens a list above the box (`components/common/CommandPopup.tsx`, driven by `Composer`). It lists agents, Claude's own commands (built-ins, skills, custom commands; `main/command-catalog.js`) plus the app's own `summon` and `/plan`. `/plan` is not a headless Claude command: `App.tsx` (`PLAN_COMMAND`) turns it into the *Plan only* permission mode and sends the rest as the task. `/help` and similar terminal-only commands do not run headless and are not listed. Typing narrows it (names that start with the text first, then ones that contain it); Up/Down moves, Enter or Tab picks (inserts `/name ` and does not send), Esc closes only the popup. Picking a skill or custom command just fills the box: sent as an ordinary message, Claude runs it. Picking an agent and adding a task starts it (see above). Add new kinds of command in `command-catalog.js` and `lib/commands.ts`.
+
+**Delegated agents** (observed): when Claude itself calls its Agent tool for a type that matches a definition in `.claude/agents/` (project or `~/.claude`, same gate as `/<agent>`, case-insensitive; `bar.agentDefinitions`), `useClaudeRun` hands the `subagent` events to `useAgents.observe`, which creates an *observed* agent (`observed: true`) in the workspace that started the run: tab, orb, first message = the delegated prompt, inner tool calls in its log and as monsters, the result when it ends, and a meta line in the Expedition chat. Built-in types (`Explore`, `Plan`, `general-purpose`...) and unknown names are not agents: their inner calls come back to the run as ordinary tool lines (`onUnclaimed` -> `useClaudeRun.replay`). Observed agents have no process: the composer is disabled in their tab, Stop ends the whole Expedition run (they finish as cancelled), they do not use `MAX_AGENTS` start slots, and they count for the HUD and the hero's wake/sleep. They are kept in memory only (not saved, gone after a restart).
 
 **Agent lifecycle**:
 - Status: idle → running → done
@@ -197,7 +202,7 @@ The only way to start an agent is `/<agent-name> <task>` at the start of a messa
 - Is the file really under `.claude/agents/` (project or `~/.claude/agents/`)? `findDefinition` in `main/agent-definitions.js` is the gate; `parseAgentInvocation` in `lib/agents.ts` is the parser
 - Verify `useAgents` receives events via `bar.onAgentEvent`
 - Check agents.js for process spawning errors
-- Minions (one spirit orb per agent) are rendered by `components/strip/Minions.tsx`, which owns their formation (a tight cluster around the hero: beside it and above its head, never overlapping). Agents arrive one at a time, so the slots are re-spread over everyone shown whenever one starts or is closed (CSS transition slides the orbs); `Minions` also tells the engine which agents are working (`setAllies`, `setMinionElements`) so it can fire projectiles from the orbs
+- Minions (one spirit wisp per agent) are rendered by `components/strip/Minions.tsx`, which anchors every wisp at the hero's body (chest height); each agent's wisp orbits the body on its own period and phase (`--orbit-*` CSS variables, `wisp-orbit` animation, passing behind and in front of the hero); `Minions` also tells the engine which agents are working (`setAllies`, `setMinionElements`) so it can fire projectiles from the wisps (position read at the moment of the shot)
 
 **Run Claude manually for this project**:
 ```bash
