@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Key recent features:
 - **Themes**: Dark/Light mode toggle
 - **Resizable panels**: Drag bottom edge to resize chat (300-1000px)
-- **Multi-agent orchestration**: When prompts contain keywords ("agent", "workflow", "parallel"), Claude automatically spawns 1-3 agents that run concurrently, each with a minion visualization and separate chat tab
+- **Agents**: type `/<agent-name> <task>` (the name must be a file under `.claude/agents/`) and that agent runs in its own Claude process, with its own chat tab and spirit orb. Skills, other slash commands and built-in agents are not agents
 
 ## Running the App
 
@@ -18,7 +18,7 @@ npm start        # vite build, then launch Electron
 npm run dev      # same as start, but opens DevTools
 npm run watch    # rebuild the React UI on save (then Status -> Restart App)
 npm run typecheck # tsc --noEmit over src/renderer
-npm run simulate  # build, then run 3 simulated agents against a fake claude and check the UI (tools/simulate-agents.mjs)
+npm run simulate  # build, then run 3 simulated /<agent> invocations against a fake claude and check the UI (tools/simulate-agents.mjs)
 ```
 
 The renderer is a React app bundled by Vite into `dist/renderer` (git-ignored); `main.js` loads that folder. Edit `src/renderer`, never `dist`.
@@ -43,11 +43,18 @@ The app spawns Claude Code headlessly (`claude -p --output-format stream-json`) 
 - Parses events (text and thinking deltas, tool calls, `turn` = input tokens at the start of a model call, `usage` = final tokens of a call, session info)
 - Converts Claude's event stream into UI-friendly event objects
 
-**agents.js** - Multi-agent orchestration (new)
-- Manages concurrent Claude processes for parallel work
-- Spawns up to 3 agents when prompt keywords detected
+**agents.js** - Agent processes
+- Manages concurrent Claude processes, one per invoked agent (`claude --agent <name>`)
+- At most 4 agents work at once (`MAX_AGENTS` in `lib/agents.ts`)
 - Each agent tracks status, usage, session independently
 - Agent tool calls also send named monsters at the hero; the HUD shows "N agents working…"
+
+**agent-definitions.js** - Which agents exist
+- Lists the markdown files in `<project>/.claude/agents/` and `~/.claude/agents/` (project wins on a name clash); `findDefinition` is the only gate that lets a name become an agent
+
+**command-catalog.js** / **frontmatter.js** - What the "/" popup offers
+- `listCatalog(projectPath, claudeCommands)` lists agents from `.claude/agents/<n>.md` (project and `~/.claude`, project wins), then merges Claude's own command list: `claude.listCommands(cwd)` (`claude.js`) sends an `initialize` control request over `--input-format stream-json` (no model call) and gets every runnable command (built-ins like `/compact` and `/context`, skills incl. plugin ones, custom commands). `main.js` caches it per project for 60 s (`claudeCommandsFor`). Entries get kind `agent | skill | command | builtin`; `NOT_FOR_CHAT` and `__internal` names are dropped. If Claude can't be asked, it falls back to scanning disk (skills only as `.claude/skills/<n>/SKILL.md`: flat `skills/<n>.md` do not run; commands `.claude/commands/<n>.md`, `<folder>/<n>.md` as `folder:n`)
+- Built-ins answer with one complete `assistant` message and no streamed deltas; `handleMessage` in `claude.js` emits that text when nothing was streamed (`state.streamedText`)
 
 **settings.js** - Persistent state
 - Workspaces (projects with hero seed, progress, Claude session)
@@ -57,7 +64,7 @@ The app spawns Claude Code headlessly (`claude -p --output-format stream-json`) 
 
 **preload.js** - IPC bridge
 - Exposes safe methods to renderer (no direct Node access)
-- Methods: spawn/cancel agents, update settings, import/select workspaces, send prompts
+- Methods: list agent definitions, run/message/cancel agents, update settings, import/select workspaces, send prompts
 
 ### Renderer (`src/renderer/`)
 
@@ -67,13 +74,14 @@ React 19 + TypeScript + Vite (`strict`; run `npm run typecheck`). `engine/` stay
 - **`components/`** - presentational React components (`strip/`, `panel/`, `panel/inventory/`, `common/`). Element ids/classes are kept stable because `styles/styles.css` targets them.
 - **`hooks/`** - behaviour and IPC:
   - `useClaudeRun` - project chat run: Claude events -> saved messages (incl. thinking), live token usage, XP, hero reactions
-  - `useAgents` - parallel agents: spawn, per-agent logs, minions, auto-remove
+  - `useAgents` - agents: start (`/<agent> <task>`), per-agent logs, orbs, follow-up messages
+  - `useCommandCatalog` - the commands the "/" popup offers (reloaded each time the popup opens)
   - `useGeneralChat` - the Ask chat (in-memory, project-less)
   - `useGameEngine` - creates/destroys the canvas engine, returns a safe `game` facade
   - `usePanel`, `usePanelResize`, `useWindowDrag`, `useClickThrough`, `useStageStatus`, `useWorkspaceActions`, `useBridgeEvent`
 - **`context/SettingsContext.tsx`** - renderer copy of settings.json; updates apply locally first, then persist via IPC
 - **`engine/`** - framework-free game: `game.js` (state machine/loop), `scene.js`, `sprite.js`, `aura.js`, `prestige.js`, `heroes.js`, `enemies.js`, `minionSprite.js`. No React or IPC imports.
-- **`lib/`** - pure helpers: `leveling`, `format`, `agents` (keyword rules), `models`, `heroCache`, `effects`, `bridge` (`window.bar`)
+- **`lib/`** - pure helpers: `leveling`, `format`, `agents` (`/<agent>` parsing, limits, tab names), `commands` (popup entries, filtering), `models`, `heroCache`, `effects`, `bridge` (`window.bar`)
 
 ## Key Concepts
 
@@ -94,14 +102,15 @@ The **selected workspace** (`settings.activeId`) is the orchestrator. It determi
 
 ### Agent Spawning
 
-Agents are spawned via slash commands (e.g., `/agent`, `/workflow`). When triggered:
+The only way to start an agent is `/<agent-name> <task>` at the start of a message in the Expedition chat.
 
-1. Main process spawns N concurrent Claude processes (1-3 based on prompt length)
-2. Each agent gets:
-   - Unique ID, name ("Agent 1", "Agent 2", etc.)
-   - Spirit orb (minion) hovering around the main hero
-   - Tab in agent tabs UI showing name + status
-   - Independent chat log
+1. `App.tsx` sees a message starting with `/` and asks the main process for the agents the project has (`bar.agentDefinitions` -> `agent-definitions.js`: markdown files under `.claude/agents/`, the project's and the user's).
+2. `parseAgentInvocation` (`lib/agents.ts`) accepts it only if the name matches one of those files (case-insensitive). **Anything else is not an agent**: skills (`/run`), other slash commands, built-in agents (`/Explore`), file paths (`/Users/...`) and text that merely contains an agent name all go to Claude as ordinary messages. There are no keyword triggers.
+3. `/<agent>` with no task asks for one and starts nothing. At most 4 agents work at the same time.
+4. `bar.runAgent` -> `agents:run` starts ONE Claude process: `claude -p ... --agent <name>`, in the project folder, with the permission mode chosen in the footer (headless runs cannot ask, so tools like Bash need *Accept edits* or *Bypass perms*).
+5. The agent gets a tab named after it (`gitama`, then `gitama 2` for a second run), its own log and a spirit orb. The user's `/<agent> <task>` line stays in the Expedition chat, the task is the first message in the agent's tab.
+
+**The "/" suggestion popup** (Expedition composer only): typing `/` at the start of the text opens a list above the box (`components/common/CommandPopup.tsx`, driven by `Composer`). It lists agents, Claude's own commands (built-ins, skills, custom commands; `main/command-catalog.js`) plus the app's own `summon` and `/plan`. `/plan` is not a headless Claude command: `App.tsx` (`PLAN_COMMAND`) turns it into the *Plan only* permission mode and sends the rest as the task. `/help` and similar terminal-only commands do not run headless and are not listed. Typing narrows it (names that start with the text first, then ones that contain it); Up/Down moves, Enter or Tab picks (inserts `/name ` and does not send), Esc closes only the popup. Picking a skill or custom command just fills the box: sent as an ordinary message, Claude runs it. Picking an agent and adding a task starts it (see above). Add new kinds of command in `command-catalog.js` and `lib/commands.ts`.
 
 **Agent lifecycle**:
 - Status: idle → running → done
@@ -185,10 +194,10 @@ Agents are spawned via slash commands (e.g., `/agent`, `/workflow`). When trigge
 - Hero progresses through maps via kills (`KILLS_PER_MAP` in `engine/game.js`)
 
 **Debug agent spawning**:
-- Check AGENT_KEYWORDS in `lib/agents.ts`
+- Is the file really under `.claude/agents/` (project or `~/.claude/agents/`)? `findDefinition` in `main/agent-definitions.js` is the gate; `parseAgentInvocation` in `lib/agents.ts` is the parser
 - Verify `useAgents` receives events via `bar.onAgentEvent`
 - Check agents.js for process spawning errors
-- Minions (one spirit orb per agent) are rendered by `components/strip/Minions.tsx`, which owns their formation (a tight cluster around the hero: beside it and above its head, never overlapping); the engine only reads each slot (`setMinionElements`) to fire projectiles from it
+- Minions (one spirit orb per agent) are rendered by `components/strip/Minions.tsx`, which owns their formation (a tight cluster around the hero: beside it and above its head, never overlapping). Agents arrive one at a time, so the slots are re-spread over everyone shown whenever one starts or is closed (CSS transition slides the orbs); `Minions` also tells the engine which agents are working (`setAllies`, `setMinionElements`) so it can fire projectiles from the orbs
 
 **Run Claude manually for this project**:
 ```bash
@@ -203,7 +212,10 @@ EOF
 |------|---------|
 | `main/main.js` | Electron window, tray, IPC, panel management |
 | `main/claude.js` | Claude subprocess, event parsing |
-| `main/agents.js` | Concurrent agent orchestration |
+| `main/agents.js` | Concurrent agent processes |
+| `main/agent-definitions.js` | Reads the agent definitions under `.claude/agents/` |
+| `main/command-catalog.js` | Lists agents plus Claude's own commands (built-ins, skills, custom commands) for the "/" popup |
+| `main/frontmatter.js` | Reads name / description / argument-hint from a markdown header |
 | `main/settings.js` | State persistence, workspace/agent data |
 | `main/preload.js` | Secure IPC bridge (`window.bar`), subscriptions return unsubscribe |
 | `renderer/App.tsx` | Composition root: wires hooks to components |
