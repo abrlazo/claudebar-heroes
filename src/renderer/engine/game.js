@@ -34,6 +34,8 @@ const BOSS_ATK_MULT = 2;      // a boss hits the hero twice as hard (the swing i
  * @param {{onKill?: (kills: number) => void,
  *          onMapChange?: (mapId: string, kills: number) => void,
  *          onBossDefeated?: (bossId: string) => void,
+ *          onCombo?: (steps: number) => void,
+ *          onCrit?: () => void,
  *          say?: (text: string, ms?: number) => void}} hooks
  */
 export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas, fadeEl: fade }, hooks) {
@@ -66,6 +68,7 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
     state.combo = n;
     state.comboLeft = ms;
     comboEl.textContent = n >= 2 ? `x${n} COMBO` : '';
+    if (n > 0) hooks.onCombo?.(n);
   }
 
   const scene = createScene(sceneCanvas);
@@ -239,6 +242,7 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
   // Applies the kill combo and a possible critical hit to a base damage.
   function rollDamage(base) {
     const crit = Math.random() < critChance(state.hero.stats.spd);
+    if (crit) hooks.onCrit?.();
     const mult = (1 + Math.min(state.combo, COMBO_MAX) * COMBO_STEP) * (crit ? CRIT_MULT : 1);
     return { dmg: Math.round(base * mult), crit };
   }
