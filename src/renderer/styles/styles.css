@@ -774,3 +774,11 @@ body.theme-light .trophy-count { color: #a06a00; }
 .trophy.locked canvas { filter: brightness(0); opacity: 0.35; }
 body.theme-light .trophy.locked canvas { opacity: 0.25; }
 .trophy.locked .trophy-name { color: var(--muted); }
+#achievements h4 { margin: 8px 0 4px; font-size: 11px; color: var(--muted); }
+.achievement-count { margin: 0 0 4px; font-size: 10px; color: var(--muted); }
+.achievement-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 4px; }
+.achievement { display: flex; flex-direction: column; gap: 1px; padding: 4px 6px; border: 1px solid #ffd166; border-radius: 4px; font-size: 10px; line-height: 1.2; }
+body.theme-light .achievement { border-color: #a06a00; }
+.achievement-name { font-weight: bold; }
+.achievement-desc { color: var(--muted); }
+.achievement.locked { border-color: transparent; opacity: 0.55; }
