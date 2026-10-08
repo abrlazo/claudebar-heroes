@@ -4,6 +4,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { app } = require('electron');
 const { designFor, rememberDesign } = require('./hero-design');
+const { MAX_ARCHIVED, cleanArchived, cleanArchive } = require('./archive');
 
 const DEFAULTS = {
   permissionMode: 'default',
@@ -43,6 +44,7 @@ function newWorkspace(dir, extra = {}) {
     addedAt: Date.now(),
     messages: [],
     agents: [],
+    archive: [],
     trophies: {},
     heroDesign: null,
     ...extra,
@@ -83,8 +85,9 @@ function load() {
   for (const key of LEGACY_KEYS) delete s[key];
   // XP now comes from token usage; fill in fields for older workspaces.
   s.workspaces = s.workspaces.map(({ xp, ...w }) => ({
-    usage: emptyUsage(), lastContext: 0, contextWindow: 200000, messages: [], agents: [], trophies: {}, heroDesign: null, ...w,
-  }));
+    usage: emptyUsage(), lastContext: 0, contextWindow: 200000, messages: [], agents: [], archive: [], trophies: {}, heroDesign: null, ...w,
+    // No agent process survives a restart and nothing reads these stale records, so start clean.
+  })).map((w) => ({ ...w, agents: [], archive: cleanArchive(w.archive) }));
   // One-time: bosses became rare, so every project starts with an empty trophy shelf.
   s.migrations = { ...(raw.migrations && typeof raw.migrations === 'object' && !Array.isArray(raw.migrations) ? raw.migrations : {}) };
   if (!s.migrations.trophyResetV1) {
@@ -251,7 +254,37 @@ function removeAgent(wsId, agentId) {
   return set({ workspaces: s.workspaces });
 }
 
+// ----- archive of retired / closed agent chats (workspace.archive, newest last) -----
+
+// Stores one cleaned chat (an older entry with the same id is replaced) and forgets the live record of that agent.
+// archivedAt is set here, never taken from the renderer. Returns the workspace's archive, or null for an unknown workspace.
+function archiveAgent(wsId, raw) {
+  const ws = get().workspaces.find((w) => w.id === wsId);
+  const record = cleanArchived(raw);
+  if (!ws || !record) return null;
+  record.archivedAt = Date.now();
+  const archive = [...cleanArchive(ws.archive).filter((r) => r.id !== record.id), record].slice(-MAX_ARCHIVED);
+  updateWorkspace(wsId, { archive });
+  removeAgent(wsId, record.id);
+  return archive;
+}
+
+function deleteArchived(wsId, id) {
+  const ws = get().workspaces.find((w) => w.id === wsId);
+  if (!ws) return null;
+  const archive = cleanArchive(ws.archive).filter((r) => r.id !== id);
+  updateWorkspace(wsId, { archive });
+  return archive;
+}
+
+function clearArchive(wsId) {
+  if (!get().workspaces.some((w) => w.id === wsId)) return null;
+  updateWorkspace(wsId, { archive: [] });
+  return [];
+}
+
 module.exports = {
+  archiveAgent, deleteArchived, clearArchive,
   get, set, active, updateWorkspace, addTrophy, addUsage, importWorkspace, selectWorkspace, removeWorkspace, rerollHero, applyDesign,
   newAgent, updateAgent, addAgent, removeAgent, addMessage, flushSync,
 };

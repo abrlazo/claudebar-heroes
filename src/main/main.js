@@ -9,11 +9,14 @@ const agents = require('./agents');
 const agentDefinitions = require('./agent-definitions');
 const commandCatalog = require('./command-catalog');
 const heroDesign = require('./hero-design');
+const { DRAWER_EXTRA, chooseDrawerMode, windowRect } = require('./drawer-layout');
 
 // The window is a transparent, frameless box that holds the hero strip. It
 // can be dragged anywhere (even over the taskbar) and remembers its spot.
 // Opening the chat panel grows the window upward, or downward when there
-// isn't room above. Transparent areas are click-through.
+// isn't room above. While the archive drawer is open the window also grows sideways
+// (left of the strip, else right, else not at all); `stripPos` never changes for it.
+// Transparent areas are click-through.
 const WIN_WIDTH = 560;
 const STRIP_H = 96;
 const DEFAULT_PANEL_HEIGHT = 500; // panel height + gap
@@ -31,6 +34,8 @@ let tray = null;
 let stripPos = null;       // top-left of the strip, in screen coordinates
 let panelOpen = false;
 let panelSide = 'above';
+let drawerOpen = false;     // archive drawer beside the panel (only while the panel is open)
+let drawerMode = 'left';    // 'left' | 'right' | 'overlay', chosen when it opens
 let dragTimer = null;
 let panelHeight = DEFAULT_PANEL_HEIGHT;
 let runningWsId = null;     // workspace of the Claude run in progress
@@ -73,14 +78,25 @@ function windowY() {
   return panelOpen && panelSide === 'above' ? stripPos.y - panelHeight : stripPos.y;
 }
 
+// Where the drawer would go for the strip's current spot (measured on the display it is on).
+function currentDrawerMode() {
+  // Test seam (environment of the main process only, never reachable from the renderer): the simulation runs on
+  // large displays where 'overlay' cannot happen, so it forces that mode.
+  if (process.env.CBH_FORCE_DRAWER_MODE === 'overlay') return 'overlay';
+  const { workArea } = screen.getDisplayNearestPoint({ x: stripPos.x, y: stripPos.y });
+  return chooseDrawerMode(stripPos.x, WIN_WIDTH, workArea);
+}
+
+// The window grows to the left of the strip in 'left' mode, so its x is the strip's minus that.
+function leftExtra() {
+  return drawerOpen && panelOpen && drawerMode === 'left' ? DRAWER_EXTRA : 0;
+}
+
 function applyBounds() {
   if (!win) return;
-  win.setBounds({
-    x: stripPos.x,
-    y: windowY(),
-    width: WIN_WIDTH,
-    height: panelOpen ? STRIP_H + panelHeight : STRIP_H,
-  });
+  win.setBounds(windowRect({
+    stripPos, stripW: WIN_WIDTH, stripH: STRIP_H, panelOpen, panelSide, panelHeight, drawerOpen, drawerMode,
+  }));
 }
 
 function restorePosition() {
@@ -91,6 +107,10 @@ function restorePosition() {
 
 function resetPosition() {
   stripPos = defaultStripPos();
+  if (drawerOpen) {
+    drawerMode = currentDrawerMode();
+    win?.webContents.send('panel:drawerMode', drawerMode);
+  }
   settings.set({ windowPos: null });
   applyBounds();
 }
@@ -182,7 +202,7 @@ function registerIpc() {
   // those change only through the validated handlers below.
   ipcMain.handle('settings:set', (_e, patch) => {
     if (!patch || typeof patch !== 'object') return settings.get();
-    const { workspaces, summonDesigns, migrations, ...rest } = patch;
+    const { workspaces, summonDesigns, migrations, archive, ...rest } = patch; // archive lives in workspaces; dropped for clarity
     return settings.set(rest);
   });
 
@@ -274,7 +294,7 @@ function registerIpc() {
     dragTimer = setInterval(() => {
       const p = screen.getCursorScreenPoint();
       stripPos = { x: p.x - offset.x, y: p.y - offset.y };
-      win?.setPosition(stripPos.x, windowY());
+      win?.setPosition(stripPos.x - leftExtra(), windowY());
     }, 16);
   });
 
@@ -287,6 +307,14 @@ function registerIpc() {
       panelSide = chooseSide();
       win?.webContents.send('panel:side', panelSide);
     }
+    if (drawerOpen) {
+      // The strip may now sit where the drawer no longer fits on its old side.
+      const next = currentDrawerMode();
+      if (next !== drawerMode) {
+        drawerMode = next;
+        win?.webContents.send('panel:drawerMode', drawerMode);
+      }
+    }
     applyBounds();
     settings.set({ windowPos: stripPos });
   });
@@ -294,10 +322,23 @@ function registerIpc() {
   ipcMain.handle('panel:side', () => chooseSide());
 
   ipcMain.handle('panel:setOpen', (_e, open) => {
-    panelOpen = open;
-    if (open) panelSide = chooseSide();
+    panelOpen = open === true;
+    if (!panelOpen) drawerOpen = false; // the drawer is a companion of the panel
+    if (panelOpen) panelSide = chooseSide();
     applyBounds();
     return panelSide;
+  });
+
+  // The renderer only asks to open or close the drawer; main decides the mode and the window rectangle.
+  ipcMain.handle('panel:drawerMode', () => currentDrawerMode());
+
+  ipcMain.handle('panel:setDrawer', (_e, open) => {
+    if (open !== true && open !== false) return drawerOpen ? drawerMode : 'none';
+    if (open && !panelOpen) return 'none';
+    drawerOpen = open;
+    if (open) drawerMode = currentDrawerMode();
+    applyBounds();
+    return drawerOpen ? drawerMode : 'none';
   });
 
   ipcMain.on('claude:send', (_e, payload) => {
@@ -459,6 +500,33 @@ function registerIpc() {
   ipcMain.handle('agents:cancel', (_e, { wsId, agentId }) => {
     agents.cancelAgent(agentId);
     return settings.removeAgent(wsId, agentId);
+  });
+
+  // Archive of retired / closed agent chats (workspace.archive). The renderer owns the live logs and sends
+  // a record; settings.archiveAgent rebuilds it from an allowlist and clamps every size. Each handler works
+  // on ONE project by id and answers { archive } (that project's list), or null when it refuses.
+  const knownWorkspace = (wsId) => (typeof wsId === 'string' ? settings.get().workspaces.find((w) => w.id === wsId) : undefined);
+  ipcMain.handle('agents:archive', (_e, wsId, record) => {
+    const ws = knownWorkspace(wsId);
+    if (!ws || !record || typeof record !== 'object' || Array.isArray(record) || typeof record.id !== 'string') return null;
+    // A running process must be stopped, not archived.
+    if (agents.isRunning(record.id)) return null;
+    // An agent that is live in another project cannot be archived into this one.
+    if (settings.get().workspaces.some((w) => w.id !== ws.id && (w.agents || []).some((a) => a.id === record.id))) return null;
+    const archive = settings.archiveAgent(ws.id, record);
+    return archive ? { archive } : null;
+  });
+  ipcMain.handle('archive:delete', (_e, wsId, id) => {
+    const ws = knownWorkspace(wsId);
+    if (!ws || typeof id !== 'string') return null;
+    const archive = settings.deleteArchived(ws.id, id);
+    return archive ? { archive } : null;
+  });
+  ipcMain.handle('archive:clear', (_e, wsId) => {
+    const ws = knownWorkspace(wsId);
+    if (!ws) return null;
+    const archive = settings.clearArchive(ws.id);
+    return archive ? { archive } : null;
   });
 
   ipcMain.handle('agents:list', (_e, wsId) => {
