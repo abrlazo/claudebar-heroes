@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { SettingsProvider, useActiveWorkspace, useSettings } from './context/SettingsContext';
 import { Strip } from './components/strip/Strip';
 import { Panel } from './components/panel/Panel';
+import { ArchiveDrawer } from './components/panel/ArchiveDrawer';
 import { useGameEngine } from './hooks/useGameEngine';
 import { useStageStatus } from './hooks/useStageStatus';
 import { useClaudeRun } from './hooks/useClaudeRun';
@@ -34,7 +35,7 @@ import type { ClaudeEvent, MapId, ModelAlias } from './types';
 const PLAN_COMMAND = /^\s*\/plan(?:\s+([\s\S]*))?$/i;
 
 function AppShell() {
-  const { settings, getSettings, patchWorkspace, addTrophy, persistMessage, updateSettings } = useSettings();
+  const { settings, getSettings, patchWorkspace, addTrophy, persistMessage, updateSettings, archiveAgent, deleteArchived, clearArchive } = useSettings();
   const ws = useActiveWorkspace();
   const { status, setStatus, bubble, say } = useStageStatus();
   const busyRef = useRef(false);
@@ -65,6 +66,7 @@ function AppShell() {
   const agents = useAgents({
     game, say,
     notify: (id, text) => persistMessage(id, { kind: 'meta', text }),
+    archive: archiveAgent,
     onUnclaimed: (ev) => replayRef.current(ev),
   });
   const run = useClaudeRun({
@@ -259,10 +261,19 @@ function AppShell() {
         resizeProps={resizeProps}
         project={{
           ws, run, agents, busy, projectBusy, workspaceActions,
+          archive: { count: ws?.archive?.length ?? 0, open: panel.drawerOpen, toggle: () => { void panel.toggleDrawer(); } },
           model: projectModel, onModelChange: setProjectModel, onSend: sendProjectPrompt, onStop: stop,
         }}
         ask={{ chat: ask, model: askModel, onModelChange: setAskModel }}
         inventory={{ ws, busy, actions: workspaceActions, onPickMap: pickMap }}
+      />
+      <ArchiveDrawer
+        open={panel.open && panel.drawerOpen}
+        wsId={ws?.id ?? null}
+        archive={ws?.archive ?? []}
+        onClose={() => { void panel.toggleDrawer(false); }}
+        onDelete={(id) => { if (ws) void deleteArchived(ws.id, id); }}
+        onClear={() => { if (ws) void clearArchive(ws.id); }}
       />
       <Strip
         onTogglePanel={() => panel.toggle()}
