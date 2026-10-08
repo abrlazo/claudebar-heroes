@@ -12,7 +12,8 @@ export type MapId = 'forest' | 'desert' | 'snowy' | 'lava' | 'night';
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
 export type Theme = 'dark' | 'light';
 export type ModelAlias = 'opus' | 'sonnet' | 'haiku';
-
+/** Where the archive drawer sits: left or right of the chat panel (the window widens), or over it when there is no room. */
+export type DrawerMode = 'left' | 'right' | 'overlay';
 /** A chat entry. Tool calls carry a name/summary, everything else text. */
 export type ChatMessage =
   | { kind: 'tool'; name: string; summary?: string }
@@ -41,6 +42,28 @@ export interface AgentRecord {
   status: string;
 }
 
+/** A retired or closed agent's chat, kept per project (main/archive.js clamps and validates it). Read-only. */
+export interface ArchivedAgent {
+  /** The agent id ("observed-<toolUseId>" for delegated ones); a repeat replaces the older entry. */
+  id: string;
+  name: string;
+  definition: string;
+  /** The first message sent to the agent. */
+  task: string;
+  observed: boolean;
+  status: 'done' | 'error' | 'cancelled';
+  /** idle = retired after the idle time; closed = its tab was closed. */
+  reason: 'idle' | 'closed';
+  startedAt: number;
+  endedAt: number | null;
+  /** Set by the main process. */
+  archivedAt: number;
+  usage: Usage;
+  /** Kept for a future "resume"; nothing uses it yet. */
+  sessionId: string | null;
+  messages: ChatMessage[];
+}
+
 export interface Workspace {
   id: string;
   path: string;
@@ -56,6 +79,8 @@ export interface Workspace {
   sessionId: string | null;
   messages: ChatMessage[];
   agents: AgentRecord[];
+  /** Chats of retired / closed agents, newest last. Changed only through the archive handlers in main. */
+  archive: ArchivedAgent[];
   /** Map bosses defeated, by boss id ("boss:forest"). */
   trophies: Record<string, { count: number; firstAt: number }>;
 }
@@ -170,6 +195,10 @@ export interface Bar {
   dragEnd(): void;
   panelSide(): Promise<'above' | 'below'>;
   setPanelOpen(open: boolean): Promise<'above' | 'below'>;
+  /** Where the archive drawer would open for the strip's current spot. */
+  drawerMode(): Promise<DrawerMode>;
+  /** Ask main to open or close the drawer (it chooses the mode and the window size). 'none' = closed or refused. */
+  setDrawerOpen(open: boolean): Promise<DrawerMode | 'none'>;
   quit(): void;
   restartApp(): void;
 
@@ -197,12 +226,17 @@ export interface Bar {
   projectHasReview(wsId: string): Promise<boolean>;
   cancelAgent(wsId: string, agentId: string): Promise<Settings | null>;
   listAgents(wsId: string): Promise<AgentRecord[]>;
+  /** Stores a retired / closed agent's chat in the project's archive (main clamps it; null = refused). */
+  archiveAgent(wsId: string, record: Omit<ArchivedAgent, 'archivedAt'>): Promise<{ archive: ArchivedAgent[] } | null>;
+  deleteArchived(wsId: string, id: string): Promise<{ archive: ArchivedAgent[] } | null>;
+  clearArchive(wsId: string): Promise<{ archive: ArchivedAgent[] } | null>;
 
   onClaudeEvent(cb: (event: ClaudeEvent) => void): Unsubscribe;
   onAgentEvent(cb: (event: AgentEvent) => void): Unsubscribe;
   onGeneralChatEvent(cb: (event: ClaudeEvent) => void): Unsubscribe;
   onTogglePanel(cb: () => void): Unsubscribe;
   onPanelSide(cb: (side: 'above' | 'below') => void): Unsubscribe;
+  onDrawerMode(cb: (mode: DrawerMode) => void): Unsubscribe;
   addMessage(wsId: string, message: ChatMessage): void;
 }
 
