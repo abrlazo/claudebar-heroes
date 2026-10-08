@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { bar } from '../lib/bridge';
 import { useBridgeEvent } from './useBridgeEvent';
 import { generateHero } from '../engine/heroes.js';
-import { MAX_AGENTS, REVIEW_AGENT, handoffTask, uniqueAgentName } from '../lib/agents';
+import { MAX_AGENTS, REVIEW_AGENT, handoffTask, idleLimitMs, uniqueAgentName } from '../lib/agents';
+import { dueAgents, nextDeadline } from '../lib/idle';
 import type { AgentInvocation } from '../lib/agents';
 import type { GameApi } from './useGameEngine';
-import type { AgentDefinition, AgentEvent, ChatMessage, ClaudeEvent, Hero, PermissionMode, Workspace } from '../types';
+import type { AgentDefinition, AgentEvent, ArchivedAgent, ChatMessage, ClaudeEvent, Hero, PermissionMode, Usage, Workspace } from '../types';
 
 const DEATH_ANIMATION_MS = 600;
 
@@ -58,12 +59,37 @@ export interface Agent {
    * messaged or stopped separately and does not use one of the MAX_AGENTS start slots. Kept in memory only.
    */
   observed?: boolean;
+  /** The project the agent belongs to (agents of every project share one list). */
+  wsId: string;
+  startedAt: number;
+  /** When it last finished (cleared while it works again). */
+  endedAt?: number;
+  /** How it ended; set when it goes done. */
+  outcome?: 'done' | 'error' | 'cancelled';
+  /** Last event, message to it, or the user opening its tab: the idle timer counts from here. */
+  lastActivityAt: number;
+  usage: Usage;
+}
+
+const emptyUsage = (): Usage => ({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 });
+
+/** The Agent as an archive record (main clamps it again; archivedAt is set there). */
+function toRecord(a: Agent, status: ArchivedAgent['status'], reason: ArchivedAgent['reason']): Omit<ArchivedAgent, 'archivedAt'> {
+  const first = a.log.find((m) => m.kind === 'user');
+  return {
+    id: a.id, name: a.name, definition: a.definition,
+    task: first && first.kind === 'user' ? first.text : '',
+    observed: !!a.observed, status, reason,
+    startedAt: a.startedAt, endedAt: a.endedAt ?? null,
+    usage: a.usage, sessionId: a.sessionId ?? null, messages: a.log,
+  };
 }
 
 export interface AgentsApi {
   agents: Agent[];
   selectedId: string | null;
   select: (id: string | null) => void;
+  /** Closes an agent's tab: a running agent is stopped first, then its chat goes to the archive. */
   remove: (id: string) => void;
   /**
    * Starts `definition` on `task` in its own tab and orb. Rejects with an Error if it could not start.
@@ -91,11 +117,13 @@ export interface AgentsApi {
  * truth is `agentsRef` so event handlers never read stale state; `agents`
  * mirrors it for rendering.
  */
-export function useAgents({ game, say, notify, onUnclaimed }: {
+export function useAgents({ game, say, notify, archive, onUnclaimed }: {
   game: GameApi;
   say: (text: string, ms?: number) => void;
   /** Posts a meta message in a workspace's Expedition chat (chain progress). */
   notify: (wsId: string, text: string) => void;
+  /** Keeps a chat in the project's archive (false when it could not be saved). */
+  archive: (wsId: string, record: Omit<ArchivedAgent, 'archivedAt'>) => Promise<boolean>;
   /** An inner event of a delegation that turned out not to be a known agent: show it as an ordinary event. */
   onUnclaimed: (ev: ClaudeEvent) => void;
 }): AgentsApi {
@@ -110,6 +138,13 @@ export function useAgents({ game, say, notify, onUnclaimed }: {
   const created = useRef(0);
   const chains = useRef(new Map<string, Chain>()); // running agent id -> what runs after it
   const failed = useRef(new Set<string>()); // agents that errored or were cancelled
+  const stopped = useRef(new Set<string>()); // agents the user stopped (their end is "cancelled", not an error)
+  const handingOff = useRef(new Set<string>()); // finished agents whose log a chain hand-off is still reading
+  const retiring = useRef(new Set<string>()); // retire() in flight
+  const archiveFailed = useRef(new Set<string>()); // agents whose failed archiving was already reported
+  const [idleTick, setIdleTick] = useState(0); // bumped to re-plan the idle timer when the plan changed without a render
+  const archiveRef = useRef(archive);
+  archiveRef.current = archive;
   const notifyRef = useRef(notify);
   notifyRef.current = notify;
   const unclaimedRef = useRef(onUnclaimed);
@@ -127,9 +162,15 @@ export function useAgents({ game, say, notify, onUnclaimed }: {
   }, [commit]);
 
   const select = useCallback((id: string | null) => {
+    const prev = selectedRef.current;
     selectedRef.current = id;
     setSelectedId(id);
-  }, []);
+    // Opening a tab, and leaving it, both restart its idle time.
+    if (prev !== id && (prev || id)) {
+      const now = Date.now();
+      commit(agentsRef.current.map((a) => (a.id === prev || a.id === id ? { ...a, lastActivityAt: now } : a)));
+    }
+  }, [commit]);
 
   const later = useCallback((fn: () => void, ms: number) => {
     const id = setTimeout(() => { timers.current.delete(id); fn(); }, ms);
@@ -147,17 +188,6 @@ export function useAgents({ game, say, notify, onUnclaimed }: {
     const names = chain.rest.map((s) => s.definition.name).join(', ');
     notifyRef.current(chain.ws.id, `Chain stopped: ${name} ${why}. Dropped: ${names}.`);
   }, []);
-
-  const remove = useCallback((id: string) => {
-    const agent = agentsRef.current.find((a) => a.id === id);
-    if (!agent || agent.dying) return;
-    dropChain(id, agent.name, 'was closed');
-    update(id, (a) => ({ ...a, dying: true }));
-    later(() => {
-      commit(agentsRef.current.filter((a) => a.id !== id));
-      if (selectedRef.current === id) select(null);
-    }, DEATH_ANIMATION_MS);
-  }, [commit, dropChain, later, select, update]);
 
   /** Starts the next queued step after `agent` finished OK, in the workspace the chain began in. */
   const advance = useCallback(async (agent: Agent) => {
@@ -201,8 +231,14 @@ export function useAgents({ game, say, notify, onUnclaimed }: {
   const complete = useCallback((id: string) => {
     const agent = agentsRef.current.find((a) => a.id === id);
     if (!agent || agent.status === 'done') return;
-    update(id, (a) => ({ ...a, status: 'done' }));
-    void advance(agent);
+    const outcome = stopped.current.has(id) ? 'cancelled' : failed.current.has(id) ? 'error' : 'done';
+    const now = Date.now();
+    update(id, (a) => ({ ...a, status: 'done', outcome, endedAt: now, lastActivityAt: now }));
+    handingOff.current.add(id); // the idle timer leaves it alone until advance() has read its log
+    void advance(agent).finally(() => {
+      handingOff.current.delete(id);
+      setIdleTick((n) => n + 1); // the finished agent may retire now (re-plans the idle timer)
+    });
     if (agentsRef.current.every((a) => a.status === 'done') && spawningRef.current === 0) say('All agents complete!', 2500);
   }, [advance, say, update]);
 
@@ -218,28 +254,41 @@ export function useAgents({ game, say, notify, onUnclaimed }: {
       return;
     }
 
+    // Any event counts as activity for the idle timer.
+    const touch = (a: Agent): Agent => ({ ...a, lastActivityAt: Date.now() });
     switch (type) {
       case 'session':
-        if (ev.sessionId) update(agentId, (a) => ({ ...a, sessionId: ev.sessionId }));
+        update(agentId, (a) => touch(ev.sessionId ? { ...a, sessionId: ev.sessionId } : a));
+        break;
+      case 'usage':
+        update(agentId, (a) => {
+          const u = ev.usage;
+          const usage = u ? {
+            input: a.usage.input + (u.input || 0), output: a.usage.output + (u.output || 0),
+            cacheRead: a.usage.cacheRead + (u.cacheRead || 0), cacheCreate: a.usage.cacheCreate + (u.cacheCreate || 0),
+          } : a.usage;
+          return touch({ ...a, usage });
+        });
         break;
       case 'text':
-        update(agentId, (a) => withText(a, ev.text ?? ''));
+        update(agentId, (a) => touch(withText(a, ev.text ?? '')));
         break;
       case 'tool':
-        update(agentId, (a) => ({ ...a, log: [...a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }] }));
+        update(agentId, (a) => touch({ ...a, log: [...a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }] }));
         game.toolEnemy(ev.name ?? '');
         break;
       case 'error':
         failed.current.add(agentId);
         // claude.js puts error text in `message`, not `text`.
-        update(agentId, (a) => ({ ...a, log: [...a.log, { kind: 'error', text: ev.message || ev.text || 'Agent error' }] }));
+        update(agentId, (a) => touch({ ...a, log: [...a.log, { kind: 'error', text: ev.message || ev.text || 'Agent error' }] }));
         break;
       case 'result':
         if (ev.isError) failed.current.add(agentId);
         // Cost and turns live on the 'result' event, not on 'end'.
+        update(agentId, touch);
         if (ev.costUsd != null) {
           const text = `${ev.turns} turn(s) · $${ev.costUsd.toFixed(4)}`;
-          update(agentId, (a) => ({ ...a, log: [...a.log, { kind: 'meta', text }] }));
+          update(agentId, (a) => touch({ ...a, log: [...a.log, { kind: 'meta', text }] }));
         }
         break;
       case 'end':
@@ -264,11 +313,13 @@ export function useAgents({ game, say, notify, onUnclaimed }: {
       if (chain?.rest.length) chains.current.set(record.id, { ws, rest: chain.rest, total: chain.total, permissionMode });
       const index = created.current;
       created.current += 1;
+      const now = Date.now();
       commit([
         ...agentsRef.current,
         {
           id: record.id,
           name: record.name,
+          wsId: ws.id, startedAt: now, lastActivityAt: now, usage: emptyUsage(),
           status: 'running',
           definition: result.definitionName ?? definition.name,
           hero: generateHero(Math.random().toString(36).substring(7)) as Hero,
@@ -297,7 +348,8 @@ export function useAgents({ game, say, notify, onUnclaimed }: {
       update(agentId, (a) => ({ ...a, log: [...a.log, { kind: 'error', text: 'This agent has no session to continue.' }] }));
       return;
     }
-    update(agentId, (a) => ({ ...a, status: 'running', log: [...a.log, { kind: 'user', text: prompt }] }));
+    stopped.current.delete(agentId);
+    update(agentId, (a) => ({ ...a, status: 'running', outcome: undefined, endedAt: undefined, lastActivityAt: Date.now(), log: [...a.log, { kind: 'user', text: prompt }] }));
     game.wake();
     bar.messageAgent(ws.id, agentId, agent.sessionId, agent.definition, prompt, ws.path, permissionMode);
   }, [game, update]);
@@ -306,6 +358,7 @@ export function useAgents({ game, say, notify, onUnclaimed }: {
     const agent = agentsRef.current.find((a) => a.id === agentId);
     if (!agent || agent.observed) return; // an observed agent stops with the Expedition run
     dropChain(agentId, agent.name, 'was stopped');
+    stopped.current.add(agentId);
     bar.cancelAgent(wsId, agentId);
   }, [dropChain]);
 
@@ -314,12 +367,13 @@ export function useAgents({ game, say, notify, onUnclaimed }: {
     for (const a of agentsRef.current) {
       if (a.status === 'done' || a.observed) continue; // observed agents stop with the Expedition run
       dropChain(a.id, a.name, 'was stopped');
+      stopped.current.add(a.id);
       bar.cancelAgent(wsId, a.id);
     }
   }, [dropChain]);
 
   /** Marks an observed agent finished and logs its result (or the error). */
-  const finishObserved = useCallback((agentId: string, isError: boolean, text?: string) => {
+  const finishObserved = useCallback((agentId: string, isError: boolean, text?: string, cancelled = false) => {
     const agent = agentsRef.current.find((a) => a.id === agentId);
     if (!agent || agent.status === 'done') return;
     const result = (text ?? '').trim();
@@ -328,7 +382,8 @@ export function useAgents({ game, say, notify, onUnclaimed }: {
       let log = a.log;
       if (isError) log = [...log, { kind: 'error', text: result || 'The agent failed' }];
       else if (result && !(tail?.kind === 'assistant' && tail.text.trim() === result)) log = [...log, { kind: 'assistant', text: result }];
-      return { ...a, status: 'done', log };
+      const now = Date.now();
+      return { ...a, status: 'done', log, outcome: cancelled ? 'cancelled' : isError ? 'error' : 'done', endedAt: now, lastActivityAt: now };
     });
   }, [update]);
 
@@ -338,10 +393,10 @@ export function useAgents({ game, say, notify, onUnclaimed }: {
     if (ev.phase === 'end') {
       finishObserved(agentId, !!ev.isError, ev.text);
     } else if (ev.phase === 'event' && ev.inner === 'tool') {
-      update(agentId, (a) => ({ ...a, log: [...a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }] }));
+      update(agentId, (a) => ({ ...a, lastActivityAt: Date.now(), log: [...a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }] }));
       game.toolEnemy(ev.name ?? '');
     } else if (ev.phase === 'event' && ev.inner === 'text' && ev.text) {
-      update(agentId, (a) => withText(a, ev.text ?? ''));
+      update(agentId, (a) => ({ ...withText(a, ev.text ?? ''), lastActivityAt: Date.now() }));
     }
   }, [finishObserved, game, update]);
 
@@ -365,10 +420,12 @@ export function useAgents({ game, say, notify, onUnclaimed }: {
     const prompt = ev.prompt || ev.description || '';
     const index = created.current;
     created.current += 1;
+    const now = Date.now();
     commit([
       ...agentsRef.current,
       {
         id, name, status: 'running', definition: definition.name,
+        wsId: d.wsId, startedAt: now, lastActivityAt: now, usage: emptyUsage(),
         hero: generateHero(Math.random().toString(36).substring(7)) as Hero,
         index, dying: false, observed: true,
         log: prompt ? [{ kind: 'user', text: prompt }] : [],
@@ -402,10 +459,80 @@ export function useAgents({ game, say, notify, onUnclaimed }: {
     for (const [id, d] of [...delegations.current]) {
       if (d.wsId !== wsId) continue;
       if (d.state === 'checking') d.closed = true;
-      else if (d.agentId) finishObserved(d.agentId, cancelled, cancelled ? 'Cancelled: the Expedition run was stopped.' : undefined);
+      else if (d.agentId) finishObserved(d.agentId, cancelled, cancelled ? 'Cancelled: the Expedition run was stopped.' : undefined, cancelled);
       delegations.current.delete(id);
     }
   }, [finishObserved]);
+
+  /**
+   * Moves an agent's chat to the project's archive, then plays its death animation and drops it.
+   * 'idle': the timer found a finished agent unused for the idle time. 'closed': the user pressed its X
+   * (a running agent is stopped first and archived as cancelled).
+   */
+  const retire = useCallback(async (id: string, reason: ArchivedAgent['reason']) => {
+    const first = agentsRef.current.find((a) => a.id === id);
+    if (!first || first.dying || retiring.current.has(id)) return;
+    if (reason === 'idle' && (first.status === 'running' || handingOff.current.has(id) || chains.current.has(id) || selectedRef.current === id)) return;
+    retiring.current.add(id);
+    try {
+      let outcome: ArchivedAgent['status'] = first.outcome ?? 'done';
+      if (reason === 'closed') {
+        dropChain(id, first.name, first.status === 'running' ? 'was stopped' : 'was closed');
+        if (first.status === 'running') {
+          outcome = 'cancelled';
+          stopped.current.add(id);
+          // A running process must be stopped before main accepts it into the archive.
+          if (!first.observed) { try { await bar.cancelAgent(first.wsId, id); } catch { /* the archive call below reports the problem */ } }
+        }
+      }
+      const cur = agentsRef.current.find((a) => a.id === id);
+      if (!cur) return;
+      const ok = await archiveRef.current(cur.wsId, toRecord(cur, outcome, reason)).catch(() => false);
+      const now = agentsRef.current.find((a) => a.id === id);
+      if (!now || now.dying) return;
+      if (reason === 'idle') {
+        // Used meanwhile (a message, or its tab opened): it stays, a later retire replaces the same archive entry.
+        if (now.status !== 'done' || now.lastActivityAt !== cur.lastActivityAt || selectedRef.current === id) return;
+        if (!ok) {
+          update(id, (a) => ({ ...a, lastActivityAt: Date.now() })); // try again after another idle period
+          if (!archiveFailed.current.has(id)) {
+            archiveFailed.current.add(id);
+            notifyRef.current(cur.wsId, `Could not archive ${cur.name}; it stays open.`);
+          }
+          return;
+        }
+      } else if (!ok) {
+        notifyRef.current(cur.wsId, `Could not save ${cur.name}'s chat to the archive.`);
+      }
+      update(id, (a) => ({ ...a, dying: true }));
+      later(() => {
+        commit(agentsRef.current.filter((a) => a.id !== id));
+        if (selectedRef.current === id) select(null);
+        failed.current.delete(id);
+        stopped.current.delete(id);
+        archiveFailed.current.delete(id);
+      }, DEATH_ANIMATION_MS);
+      if (reason === 'idle') say(`Archived ${cur.name}`, 1800);
+    } finally {
+      retiring.current.delete(id);
+    }
+  }, [commit, dropChain, later, say, select, update]);
+
+  const remove = useCallback((id: string) => { void retire(id, 'closed'); }, [retire]);
+
+  // One timer for all agents, in every project: it fires when the earliest finished agent is due.
+  // Nothing polls; `idleKey` changes exactly when the plan could (activity of finished agents, status,
+  // selection). Overdue agents (a sleeping laptop) retire at once.
+  const limit = idleLimitMs();
+  const idleKey = `${agents.map((a) => `${a.id}:${a.status}:${a.dying ? 1 : 0}:${a.status === 'done' ? a.lastActivityAt : ''}`).join('|')}#${selectedId}#${limit}#${idleTick}`;
+  useEffect(() => {
+    const due = nextDeadline(agentsRef.current, limit, selectedRef.current, handingOff.current);
+    if (due === null) return undefined;
+    const timer = setTimeout(() => {
+      for (const a of dueAgents(agentsRef.current, Date.now(), limit, selectedRef.current, handingOff.current)) void retire(a.id, 'idle');
+    }, Math.min(Math.max(0, due - Date.now()) + 25, 2 ** 31 - 1));
+    return () => clearTimeout(timer);
+  }, [idleKey, limit, retire]);
 
   const running = spawning > 0 || agents.some((a) => a.status !== 'done');
   return { agents, selectedId, select, remove, spawn, message, stop, stopAll, running, observe, endObserved };

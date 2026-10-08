@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { SettingsProvider, useActiveWorkspace, useSettings } from './context/SettingsContext';
 import { Strip } from './components/strip/Strip';
 import { Panel } from './components/panel/Panel';
+import { ArchiveDrawer } from './components/panel/ArchiveDrawer';
 import { useGameEngine } from './hooks/useGameEngine';
 import { useStageStatus } from './hooks/useStageStatus';
+import { useAchievements } from './hooks/useAchievements';
 import { useClaudeRun } from './hooks/useClaudeRun';
 import { useAgents } from './hooks/useAgents';
 import { useGeneralChat } from './hooks/useGeneralChat';
@@ -34,14 +36,18 @@ import type { ClaudeEvent, MapId, ModelAlias } from './types';
 const PLAN_COMMAND = /^\s*\/plan(?:\s+([\s\S]*))?$/i;
 
 function AppShell() {
-  const { settings, getSettings, patchWorkspace, addTrophy, persistMessage, updateSettings } = useSettings();
+  const { settings, getSettings, patchWorkspace, addTrophy, persistMessage, updateSettings, archiveAgent, deleteArchived, clearArchive } = useSettings();
   const ws = useActiveWorkspace();
   const { status, setStatus, bubble, say } = useStageStatus();
   const busyRef = useRef(false);
   const [projectModel, setProjectModel] = useState<ModelAlias>(DEFAULT_PROJECT_MODEL);
   const [askModel, setAskModel] = useState<ModelAlias>(DEFAULT_ASK_MODEL);
 
+  // Achievements read stats the engine reports; `ach` is filled below, once the hook exists.
+  const achRef = useRef<ReturnType<typeof useAchievements> | null>(null);
   const { game, refs } = useGameEngine({
+    onCombo: (n) => achRef.current?.noteCombo(n),
+    onCrit: () => achRef.current?.noteCrit(),
     onKill: (kills) => {
       const id = getSettings().activeId;
       if (id) patchWorkspace(id, { kills });
@@ -60,11 +66,14 @@ function AppShell() {
     },
     say,
   });
+  const ach = useAchievements(say, ws);
+  achRef.current = ach;
   // An inner event of a delegation that is not a shown agent goes back to the run as an ordinary event.
   const replayRef = useRef<(ev: ClaudeEvent) => void>(() => {});
   const agents = useAgents({
     game, say,
     notify: (id, text) => persistMessage(id, { kind: 'meta', text }),
+    archive: archiveAgent,
     onUnclaimed: (ev) => replayRef.current(ev),
   });
   const run = useClaudeRun({
@@ -89,7 +98,8 @@ function AppShell() {
   // (Driven by state: a ref-based check at event time is stale until the next render.)
   useEffect(() => {
     if (busy) game.wake();
-    else game.sleep();
+    else { game.sleep(); ach.flush(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- flush is stable
   }, [busy, game]);
 
   const workspaceActions = useWorkspaceActions({ busy, say });
@@ -149,7 +159,12 @@ function AppShell() {
   useEffect(() => { game.configure({ level }); }, [game, level, wsId, heroSeed, designAt]);
 
   const map = ws?.map;
-  useEffect(() => { if (map) game.configure({ mapId: map }); }, [map, game]);
+  useEffect(() => {
+    if (!map) return;
+    game.configure({ mapId: map });
+    ach.noteMap(map);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- noteMap is stable; the map/workspace changing is the trigger
+  }, [map, wsId, game]);
 
   // "/<agent-name> <task>" runs that agent in its own tab and orb. Only names found under
   // .claude/agents count; skills, other slash commands and plain text are not agents.
@@ -166,6 +181,7 @@ function AppShell() {
     say(`Summoning ${definition.name}…`, 2000);
     try {
       await agents.spawn(target, definition, task, settings.permissionMode, rest.length ? { rest, total: rest.length + 1 } : undefined);
+      ach.noteAgent();
       persistMessage(target.id, { kind: 'meta', text: rest.length
         ? `Chain: ${[definition, ...rest.map((s) => s.definition)].map((d) => d.name).join(' -> ')}. ${definition.name} is working in its own tab.`
         : `${definition.name} is working in its own tab.` });
@@ -259,10 +275,19 @@ function AppShell() {
         resizeProps={resizeProps}
         project={{
           ws, run, agents, busy, projectBusy, workspaceActions,
+          archive: { count: ws?.archive?.length ?? 0, open: panel.drawerOpen, toggle: () => { void panel.toggleDrawer(); } },
           model: projectModel, onModelChange: setProjectModel, onSend: sendProjectPrompt, onStop: stop,
         }}
         ask={{ chat: ask, model: askModel, onModelChange: setAskModel }}
         inventory={{ ws, busy, actions: workspaceActions, onPickMap: pickMap }}
+      />
+      <ArchiveDrawer
+        open={panel.open && panel.drawerOpen}
+        wsId={ws?.id ?? null}
+        archive={ws?.archive ?? []}
+        onClose={() => { void panel.toggleDrawer(false); }}
+        onDelete={(id) => { if (ws) void deleteArchived(ws.id, id); }}
+        onClear={() => { if (ws) void clearArchive(ws.id); }}
       />
       <Strip
         onTogglePanel={() => panel.toggle()}

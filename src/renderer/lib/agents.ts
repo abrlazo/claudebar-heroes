@@ -82,3 +82,15 @@ export function uniqueAgentName(base: string, existing: string[]): string {
   while (existing.includes(`${base} ${n}`)) n += 1;
   return `${base} ${n}`;
 }
+
+/** A finished agent is retired to the project's archive after this long without activity. Running agents never are. */
+export const IDLE_RETIRE_MS = 2 * 60 * 1000;
+
+/**
+ * The idle time in use. `globalThis.__cbhIdleMs` is a test seam (renderer only, never settings or IPC),
+ * like `__cbhBossChance`; it must be a finite number of at least 500 ms.
+ */
+export function idleLimitMs(): number {
+  const seam = (globalThis as { __cbhIdleMs?: unknown }).__cbhIdleMs;
+  return typeof seam === 'number' && Number.isFinite(seam) && seam >= 500 ? seam : IDLE_RETIRE_MS;
+}

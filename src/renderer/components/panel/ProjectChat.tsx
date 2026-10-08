@@ -34,10 +34,12 @@ export interface ProjectChatProps {
   onSend: (text: string) => void;
   onStop: () => void;
   workspaceActions: WorkspaceActions;
+  /** The archive drawer beside the panel. */
+  archive: { count: number; open: boolean; toggle: () => void };
 }
 
 export function ProjectChat({
-  visible, ws, run, agents, busy, projectBusy, model, onModelChange, onSend, onStop, workspaceActions,
+  visible, ws, run, agents, busy, projectBusy, model, onModelChange, onSend, onStop, workspaceActions, archive,
 }: ProjectChatProps & { visible: boolean }) {
   const { settings, updateSettings } = useSettings();
   const { suggestions, refresh: refreshCommands } = useCommandCatalog(ws?.id ?? null);
@@ -61,6 +63,10 @@ export function ProjectChat({
         selectedId={agents.selectedId}
         onSelect={agents.select}
         onRemove={agents.remove}
+        archiveCount={archive.count}
+        archiveOpen={archive.open}
+        onToggleArchive={archive.toggle}
+        visible={visible}
       />
       <MessageLog messages={messages} streaming={streaming} streamingThinking={streamingThinking} working={working} visible={visible} />
       {liveUsage && <div className="run-usage">{`Tokens this run: ${usageLine(liveUsage)}`}</div>}

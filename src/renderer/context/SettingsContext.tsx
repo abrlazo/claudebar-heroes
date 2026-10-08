@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { bar } from '../lib/bridge';
-import type { ChatMessage, Settings, Workspace } from '../types';
+import type { ArchivedAgent, ChatMessage, Settings, Workspace } from '../types';
 
 /** Fields of a workspace the main process lets the renderer persist directly. */
 type ProgressPatch = Partial<Pick<Workspace, 'kills' | 'map'>>;
@@ -16,12 +16,18 @@ interface SettingsApi {
   patchWorkspace: (id: string, patch: ProgressPatch) => void;
   /** A map boss fell: count it on the workspace's trophy shelf, locally and on disk. */
   addTrophy: (id: string, bossId: string) => void;
+  /** An achievement was earned: record it locally, then on disk (main validates the id). */
+  addAchievement: (id: string, achId: string) => void;
   /** Append a chat message to a workspace, locally and on disk. */
   persistMessage: (wsId: string, message: ChatMessage) => void;
   /** Patch top-level settings (theme, panelHeight, ...) locally and persist. */
   updateSettings: (patch: Partial<Settings>) => void;
   /** Patch top-level settings locally only (e.g. during a live drag). */
   updateSettingsLocal: (patch: Partial<Settings>) => void;
+  /** Keep a retired / closed agent's chat in the project's archive. False when main refused or the call failed. */
+  archiveAgent: (wsId: string, record: Omit<ArchivedAgent, 'archivedAt'>) => Promise<boolean>;
+  deleteArchived: (wsId: string, id: string) => Promise<boolean>;
+  clearArchive: (wsId: string) => Promise<boolean>;
   /** Always-current settings for event handlers that outlive a render. */
   getSettings: () => Settings;
 }
@@ -48,6 +54,17 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setSettings((s) => (s ? { ...s, workspaces: s.workspaces.map((w) => (w.id === id ? fn(w) : w)) } : s));
   }, []);
 
+  const applyArchive = useCallback(async (call: Promise<{ archive: ArchivedAgent[] } | null>, wsId: string) => {
+    try {
+      const result = await call;
+      if (!result) return false;
+      mapWorkspace(wsId, (w) => ({ ...w, archive: result.archive }));
+      return true;
+    } catch {
+      return false;
+    }
+  }, [mapWorkspace]);
+
   const actions = useMemo(() => ({
     replace: (next: Settings) => setSettings(next),
     patchWorkspaceLocal: (id: string, patch: Partial<Workspace>) => mapWorkspace(id, (w) => ({ ...w, ...patch })),
@@ -62,6 +79,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       });
       bar.addTrophy(id, bossId);
     },
+    addAchievement: (id: string, achId: string) => {
+      mapWorkspace(id, (w) => (w.achievements?.[achId] ? w : { ...w, achievements: { ...w.achievements, [achId]: { at: Date.now() } } }));
+      bar.addAchievement(id, achId);
+    },
     persistMessage: (wsId: string, message: ChatMessage) => {
       mapWorkspace(wsId, (w) => ({ ...w, messages: [...(w.messages || []), message] }));
       bar.addMessage(wsId, message);
@@ -72,7 +93,11 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     },
     updateSettingsLocal: (patch: Partial<Settings>) => setSettings((s) => (s ? { ...s, ...patch } : s)),
     getSettings: () => settingsRef.current as Settings,
-  }), [mapWorkspace]);
+    // The archive is written by main only; its answer (that project's list) is the authority.
+    archiveAgent: (wsId: string, record: Omit<ArchivedAgent, 'archivedAt'>) => applyArchive(bar.archiveAgent(wsId, record), wsId),
+    deleteArchived: (wsId: string, id: string) => applyArchive(bar.deleteArchived(wsId, id), wsId),
+    clearArchive: (wsId: string) => applyArchive(bar.clearArchive(wsId), wsId),
+  }), [applyArchive, mapWorkspace]);
 
   const value = useMemo(() => (settings ? { settings, ...actions } : null), [settings, actions]);
   if (!value) return null;

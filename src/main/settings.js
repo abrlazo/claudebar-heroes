@@ -4,6 +4,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { app } = require('electron');
 const { designFor, rememberDesign } = require('./hero-design');
+const { MAX_ARCHIVED, cleanArchived, cleanArchive } = require('./archive');
 
 const DEFAULTS = {
   permissionMode: 'default',
@@ -24,6 +25,10 @@ function file() {
   return path.join(app.getPath('userData'), 'settings.json');
 }
 
+const MAP_IDS = ['forest', 'desert', 'snowy', 'lava', 'night'];
+const MAX_ACHIEVEMENTS = 100;
+const STAT_CAP = 1e9;
+const emptyStats = () => ({ bestCombo: 0, crits: 0, agents: 0, mapsSeen: [] });
 const emptyUsage = () => ({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 });
 
 // Each imported project gets its own hero (from `heroSeed`), progress and
@@ -43,7 +48,10 @@ function newWorkspace(dir, extra = {}) {
     addedAt: Date.now(),
     messages: [],
     agents: [],
+    archive: [],
     trophies: {},
+    achievements: {},
+    stats: emptyStats(),
     heroDesign: null,
     ...extra,
   };
@@ -59,6 +67,18 @@ function newAgent(name, index) {
     usage: emptyUsage(),
     startTime: null,
     endTime: null,
+  };
+}
+
+// A stats object with only known numeric fields and known maps (fills older files).
+function cleanStats(raw) {
+  const r = raw && typeof raw === 'object' ? raw : {};
+  const n = (v) => (Number.isFinite(v) ? Math.max(0, Math.min(Math.floor(v), STAT_CAP)) : 0);
+  return {
+    bestCombo: Math.min(n(r.bestCombo), 99),
+    crits: n(r.crits),
+    agents: n(r.agents),
+    mapsSeen: Array.isArray(r.mapsSeen) ? MAP_IDS.filter((m) => r.mapsSeen.includes(m)) : [],
   };
 }
 
@@ -83,8 +103,9 @@ function load() {
   for (const key of LEGACY_KEYS) delete s[key];
   // XP now comes from token usage; fill in fields for older workspaces.
   s.workspaces = s.workspaces.map(({ xp, ...w }) => ({
-    usage: emptyUsage(), lastContext: 0, contextWindow: 200000, messages: [], agents: [], trophies: {}, heroDesign: null, ...w,
-  }));
+    usage: emptyUsage(), lastContext: 0, contextWindow: 200000, messages: [], agents: [], archive: [], trophies: {}, achievements: {}, heroDesign: null, ...w,
+    // No agent process survives a restart and nothing reads these stale records, so start clean.
+  })).map((w) => ({ ...w, agents: [], stats: cleanStats(w.stats), archive: cleanArchive(w.archive) }));
   // One-time: bosses became rare, so every project starts with an empty trophy shelf.
   s.migrations = { ...(raw.migrations && typeof raw.migrations === 'object' && !Array.isArray(raw.migrations) ? raw.migrations : {}) };
   if (!s.migrations.trophyResetV1) {
@@ -169,6 +190,38 @@ function addTrophy(id, bossId) {
   return updateWorkspace(id, { trophies });
 }
 
+// An achievement was earned (the id is checked against an allowlist in main.js). Repeats are ignored, none is ever removed.
+function addAchievement(id, achId) {
+  const ws = get().workspaces.find((w) => w.id === id);
+  if (!ws) return get();
+  const old = ws.achievements && typeof ws.achievements === 'object' ? ws.achievements : {};
+  if (Object.prototype.hasOwnProperty.call(old, achId) || Object.keys(old).length >= MAX_ACHIEVEMENTS) return get();
+  return updateWorkspace(id, { achievements: { ...old, [achId]: { at: Date.now() } } });
+}
+
+// Counter changes reported by the renderer, clamped here: crits and agents add up, bestCombo is a max, mapsSeen merges known maps.
+function addStats(id, delta) {
+  const ws = get().workspaces.find((w) => w.id === id);
+  if (!ws) return get();
+  const old = cleanStats(ws.stats);
+  const add = (v) => (Number.isFinite(v) ? Math.max(0, Math.min(Math.floor(v), 1000)) : 0);
+  const seen = Array.isArray(delta.mapsSeen) ? delta.mapsSeen : [];
+  return updateWorkspace(id, { stats: cleanStats({
+    bestCombo: Math.max(old.bestCombo, Number.isFinite(delta.bestCombo) ? delta.bestCombo : 0),
+    crits: old.crits + add(delta.crits),
+    agents: old.agents + add(delta.agents),
+    mapsSeen: [...old.mapsSeen, ...seen],
+  }) });
+}
+
+// Mark a one-time migration as done and write it at once (only names main knows).
+function markMigration(name) {
+  if (name !== 'achievementsBackfillV1') return get();
+  const s = set({ migrations: { ...get().migrations, [name]: true } });
+  flushSync();
+  return s;
+}
+
 function addMessage(wsId, message) {
   const s = get();
   const ws = s.workspaces.find((w) => w.id === wsId);
@@ -251,7 +304,37 @@ function removeAgent(wsId, agentId) {
   return set({ workspaces: s.workspaces });
 }
 
+// ----- archive of retired / closed agent chats (workspace.archive, newest last) -----
+
+// Stores one cleaned chat (an older entry with the same id is replaced) and forgets the live record of that agent.
+// archivedAt is set here, never taken from the renderer. Returns the workspace's archive, or null for an unknown workspace.
+function archiveAgent(wsId, raw) {
+  const ws = get().workspaces.find((w) => w.id === wsId);
+  const record = cleanArchived(raw);
+  if (!ws || !record) return null;
+  record.archivedAt = Date.now();
+  const archive = [...cleanArchive(ws.archive).filter((r) => r.id !== record.id), record].slice(-MAX_ARCHIVED);
+  updateWorkspace(wsId, { archive });
+  removeAgent(wsId, record.id);
+  return archive;
+}
+
+function deleteArchived(wsId, id) {
+  const ws = get().workspaces.find((w) => w.id === wsId);
+  if (!ws) return null;
+  const archive = cleanArchive(ws.archive).filter((r) => r.id !== id);
+  updateWorkspace(wsId, { archive });
+  return archive;
+}
+
+function clearArchive(wsId) {
+  if (!get().workspaces.some((w) => w.id === wsId)) return null;
+  updateWorkspace(wsId, { archive: [] });
+  return [];
+}
+
 module.exports = {
-  get, set, active, updateWorkspace, addTrophy, addUsage, importWorkspace, selectWorkspace, removeWorkspace, rerollHero, applyDesign,
+  archiveAgent, deleteArchived, clearArchive,
+  get, set, active, updateWorkspace, addTrophy, addAchievement, addStats, markMigration, addUsage, importWorkspace, selectWorkspace, removeWorkspace, rerollHero, applyDesign,
   newAgent, updateAgent, addAgent, removeAgent, addMessage, flushSync,
 };

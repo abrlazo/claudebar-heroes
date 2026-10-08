@@ -6,6 +6,7 @@
   --text: #ecebff;
   --muted: #a3a3c2;
   --strip-h: 96px;
+  --main-w: 560px; /* the strip / panel width (WIN_WIDTH in main.js) */
   --radius: 10px;
   --panel-bg-alpha: 0.99;
   --hud-bg-alpha: 0.95;
@@ -282,7 +283,7 @@ body.resizing, body.resizing * { cursor: ns-resize !important; }
   background: rgba(26, 26, 46, 0.7);
 }
 
-.agent-tab {
+.agent-tab, .archive-pill {
   padding: 4px 10px;
   border: 1px solid #3a3a5c;
   border-radius: 4px;
@@ -297,13 +298,89 @@ body.resizing, body.resizing * { cursor: ns-resize !important; }
   gap: 4px;
 }
 
-.agent-tab:hover { border-color: var(--purple); }
-.agent-tab.active { background: var(--purple); border-color: var(--purple); }
+.agent-tab:hover, .archive-pill:hover { border-color: var(--purple); }
+.agent-tab.active, .archive-pill.active { background: var(--purple); border-color: var(--purple); }
 .agent-tab .status { font-size: 9px; opacity: 0.7; }
 .agent-tab .close { cursor: pointer; opacity: 0.6; margin-left: 4px; }
 .agent-tab .close:hover { opacity: 1; }
 
 body.theme-light .agent-tabs { background: rgba(245, 245, 247, 0.7); }
+
+/* Idle countdown on a finished agent's tab, and the "quiet" hint on a running one. */
+.agent-tab .idle { font-size: 9px; opacity: 0.55; font-variant-numeric: tabular-nums; }
+.agent-tab .idle.quiet { opacity: 0.9; color: #e0a030; }
+body.theme-light .agent-tab .idle.quiet { color: #a06800; }
+.agent-tab.active .idle { opacity: 0.8; }
+.archive-pill { margin-left: auto; flex: none; }
+
+/* ---------- Archive of retired / closed agent chats (a drawer beside the panel) ---------- */
+
+/* The window is --main-w wide, or 608px wider while the drawer is open (main.js). The strip and panel
+   hold to the edge that does not move, so they stay put when the window grows. */
+body.drawer-left #strip, body.drawer-left #panel { left: auto; right: 0; width: var(--main-w); }
+body.drawer-right #strip, body.drawer-right #panel { left: 0; right: auto; width: var(--main-w); }
+
+#archive-drawer {
+  position: absolute;
+  top: 0;
+  bottom: calc(var(--strip-h) + 8px);
+  width: 600px;
+  display: none;
+  background: rgba(26, 26, 46, var(--panel-bg-alpha));
+  border: 2px solid var(--purple);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  z-index: 6;
+}
+body.panel-below #archive-drawer { top: calc(var(--strip-h) + 8px); bottom: 0; }
+body.drawer-left #archive-drawer { left: 0; animation: drawer-in-left 0.16s ease-out; }
+body.drawer-right #archive-drawer { left: calc(var(--main-w) + 8px); animation: drawer-in-right 0.16s ease-out; }
+/* No room beside the panel: the drawer lies over it (the panel's width). */
+body.drawer-overlay #archive-drawer { left: 0; width: var(--main-w); animation: drawer-in-right 0.16s ease-out; }
+body.drawer-open #archive-drawer:not([hidden]) { display: flex; }
+@keyframes drawer-in-left { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+@keyframes drawer-in-right { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { #archive-drawer { animation: none !important; } }
+body.theme-light #archive-drawer { background: rgba(245, 245, 247, var(--panel-bg-alpha)); }
+
+.archive-side { flex: 0 0 196px; min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 8px; border-right: 1px solid #3a3a5c; }
+body.theme-light .archive-side { border-right-color: #d0d0d5; }
+.archive-chat { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 8px; }
+.archive-chat .msg-log { flex: 1; min-height: 0; }
+.archive-close { font-size: 11px; padding: 2px 8px; }
+.archive-item.selected { border-color: var(--purple); box-shadow: inset 3px 0 0 var(--purple); }
+body.theme-light .archive-item.selected { border-color: var(--purple); background: #ece8fb; }
+.archive-badge.observed { color: var(--purple); }
+.archive-side .archive-when { text-align: left; flex: none; }
+
+.archive-head { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.archive-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.archive-head button, .archive-delete { font-size: 11px; padding: 2px 8px; cursor: pointer; }
+.archive-clear.confirm { border-color: #e0a030; color: #e0a030; }
+body.theme-light .archive-clear.confirm { border-color: #a06800; color: #a06800; }
+.archive-readonly { font-size: 10px; color: var(--muted); }
+.archive-meta { font-size: 10px; color: var(--muted); }
+.archive-empty { color: var(--muted); font-size: 12px; padding: 12px 4px; }
+.archive-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.archive-item {
+  border: 1px solid #3a3a5c; border-radius: 6px; padding: 5px 8px; cursor: pointer;
+  background: var(--ink-2); display: flex; flex-direction: column; gap: 2px;
+}
+body.theme-light .archive-item { border-color: #d0d0d5; }
+.archive-item:hover, .archive-item:focus-visible { border-color: var(--purple); outline: none; }
+.archive-row { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.archive-name { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.archive-when { flex: 1; min-width: 0; color: var(--muted); font-size: 10px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.archive-task { font-size: 11px; color: var(--text); opacity: 0.85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.archive-tokens { font-size: 10px; color: var(--muted); }
+.archive-badge { font-size: 9px; padding: 0 5px; border-radius: 8px; border: 1px solid currentColor; text-transform: uppercase; letter-spacing: 0.04em; }
+.archive-badge.done { color: #4ade80; }
+.archive-badge.error { color: #ff8080; }
+.archive-badge.cancelled { color: #e0a030; }
+body.theme-light .archive-badge.done { color: #15803d; }
+body.theme-light .archive-badge.error { color: #d32f2f; }
+body.theme-light .archive-badge.cancelled { color: #a06800; }
 
 /* ---------- Minions ---------- */
 
@@ -697,3 +774,11 @@ body.theme-light .trophy-count { color: #a06a00; }
 .trophy.locked canvas { filter: brightness(0); opacity: 0.35; }
 body.theme-light .trophy.locked canvas { opacity: 0.25; }
 .trophy.locked .trophy-name { color: var(--muted); }
+#achievements h4 { margin: 8px 0 4px; font-size: 11px; color: var(--muted); }
+.achievement-count { margin: 0 0 4px; font-size: 10px; color: var(--muted); }
+.achievement-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 4px; }
+.achievement { display: flex; flex-direction: column; gap: 1px; padding: 4px 6px; border: 1px solid #ffd166; border-radius: 4px; font-size: 10px; line-height: 1.2; }
+body.theme-light .achievement { border-color: #a06a00; }
+.achievement-name { font-weight: bold; }
+.achievement-desc { color: var(--muted); }
+.achievement.locked { border-color: transparent; opacity: 0.55; }

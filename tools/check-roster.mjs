@@ -95,5 +95,15 @@ check('boss: the test seam accepts 0.5 and 0', bossChance() === 0.5 && (globalTh
 delete globalThis.__cbhBossChance;
 check('boss: the stage key changes with the map and every 8 kills', stageKey('forest', 7, 8) === 'forest:0' && stageKey('forest', 8, 8) === 'forest:1' && stageKey('desert', 7, 8) !== stageKey('forest', 7, 8));
 
+// ----- achievements (lib/achievements.ts, allowlist in main/main.js) -----
+const achSrc = fs.readFileSync(path.join(root, 'src/renderer/lib/achievements.ts'), 'utf8');
+const achIds = [...achSrc.matchAll(/\{ id: '([^']+)'/g)].map((m) => m[1]);
+const achTiers = [...achSrc.matchAll(/tier: '(short|medium|long)'/g)].map((m) => m[1]);
+const mainSrc = fs.readFileSync(path.join(root, 'src/main/main.js'), 'utf8');
+const mainIds = [...(mainSrc.match(/const ACHIEVEMENT_IDS = \[([\s\S]*?)\];/)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]);
+check('achievements: ids are unique and there are some', achIds.length > 0 && new Set(achIds).size === achIds.length, `${achIds.length} ids`);
+check('achievements: every tier has at least one', ['short', 'medium', 'long'].every((t) => achTiers.includes(t)) && achTiers.length === achIds.length);
+check('achievements: the allowlist in main.js matches the table', JSON.stringify([...mainIds].sort()) === JSON.stringify([...achIds].sort()), `main ${mainIds.length}, table ${achIds.length}`);
+
 console.log(failed ? `\n${failed} check(s) failed` : '\nAll roster checks passed');
 process.exit(failed ? 1 : 0);
