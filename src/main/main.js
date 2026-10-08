@@ -271,6 +271,19 @@ function registerIpc() {
   ipcMain.handle('workspace:trophy', (_e, id, bossId) => (
     typeof id === 'string' && isBossId(bossId) ? settings.addTrophy(id, bossId) : settings.get()
   ));
+  // Keep in sync with ACHIEVEMENTS in src/renderer/lib/achievements.ts (npm run check compares them).
+  const ACHIEVEMENT_IDS = [
+    'first-blood', 'warm-up', 'stage-clear', 'level-2', 'combo-3', 'first-crit', 'first-agent',
+    'kills-100', 'kills-500', 'level-10', 'level-15', 'combo-5', 'crits-100', 'first-boss', 'agents-10', 'maps-all',
+    'kills-2500', 'kills-10000', 'level-25', 'level-45', 'bosses-all', 'boss-x10', 'agents-100', 'tokens-10m',
+  ];
+  ipcMain.handle('workspace:achievement', (_e, id, achId) => (
+    typeof id === 'string' && typeof achId === 'string' && ACHIEVEMENT_IDS.includes(achId) ? settings.addAchievement(id, achId) : settings.get()
+  ));
+  ipcMain.handle('workspace:stats', (_e, id, delta) => (
+    typeof id === 'string' && delta && typeof delta === 'object' ? settings.addStats(id, delta) : settings.get()
+  ));
+  ipcMain.handle('achievements:backfilled', () => settings.markMigration('achievementsBackfillV1'));
   ipcMain.handle('workspace:update', (_e, id, patch) => {
     const { kills, map } = patch; // the renderer may only touch map progress
     return settings.updateWorkspace(id, Object.fromEntries(

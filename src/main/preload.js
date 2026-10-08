@@ -18,6 +18,9 @@ contextBridge.exposeInMainWorld('bar', {
   rerollHero: (id, seed) => ipcRenderer.invoke('workspace:reroll', id, seed),
   designSummon: (wsId, name) => ipcRenderer.invoke('summon:design', wsId, name),
   addTrophy: (id, bossId) => ipcRenderer.invoke('workspace:trophy', id, bossId),
+  addAchievement: (id, achId) => ipcRenderer.invoke('workspace:achievement', id, achId),
+  addStats: (id, delta) => ipcRenderer.invoke('workspace:stats', id, delta),
+  achievementsBackfilled: () => ipcRenderer.invoke('achievements:backfilled'),
   updateWorkspace: (id, patch) => ipcRenderer.invoke('workspace:update', id, patch),
 
   setClickThrough: (ignore) => ipcRenderer.send('window:clickThrough', ignore),
