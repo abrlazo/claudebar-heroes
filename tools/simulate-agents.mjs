@@ -541,6 +541,18 @@ try {
   await evAsync('window.bar.addTrophy("sim-boss", "__proto__")');
   const afterBogus = JSON.parse(await evAsync('window.bar.getSettings().then(s=>JSON.stringify(s.workspaces[0].trophies))'));
   check('trophies: addTrophy ignores a boss id that is not a known boss', Object.keys(afterBogus).length === 0, JSON.stringify(afterBogus));
+  // Achievements: the list renders, main ignores unknown ids and repeats, and clamps reported counters.
+  await sleep(300);
+  const achUi = await ev('JSON.stringify({all:document.querySelectorAll(".achievement").length,tiers:document.querySelectorAll(".achievement-tier").length})');
+  check('achievements: three tiers and every badge are listed', achUi === JSON.stringify({ all: 24, tiers: 3 }), achUi);
+  await evAsync('window.bar.addAchievement("sim-boss", "not-real")');
+  await evAsync('window.bar.addAchievement("sim-boss", "__proto__")');
+  await evAsync('window.bar.addAchievement("sim-boss", "agents-100")');
+  await evAsync('window.bar.addAchievement("sim-boss", "agents-100")');
+  await evAsync('window.bar.addStats("sim-boss", { crits: 99999999, agents: -5, bestCombo: 1e12, mapsSeen: ["lava", "bogus", "lava"] })');
+  const achWs = JSON.parse(await evAsync('window.bar.getSettings().then(s=>JSON.stringify(s.workspaces.find(w=>w.id==="sim-boss")))'));
+  check('achievements: unknown ids are ignored, a repeat keeps one entry', !achWs.achievements['not-real'] && !achWs.achievements.__proto__?.at && Object.keys(achWs.achievements).includes('agents-100'), JSON.stringify(achWs.achievements));
+  check('achievements: reported stats are clamped (crits, agents, combo, maps)', achWs.stats.crits <= 1000 && achWs.stats.agents === 0 && achWs.stats.bestCombo <= 99 && JSON.stringify(achWs.stats.mapsSeen) === '["lava"]', JSON.stringify(achWs.stats));
   await shot('6-trophies-empty');
   await openTabByLabel('Expedition');
   await sleep(300);
