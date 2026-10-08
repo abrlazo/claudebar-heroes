@@ -16,6 +16,8 @@ interface SettingsApi {
   patchWorkspace: (id: string, patch: ProgressPatch) => void;
   /** A map boss fell: count it on the workspace's trophy shelf, locally and on disk. */
   addTrophy: (id: string, bossId: string) => void;
+  /** An achievement was earned: record it locally, then on disk (main validates the id). */
+  addAchievement: (id: string, achId: string) => void;
   /** Append a chat message to a workspace, locally and on disk. */
   persistMessage: (wsId: string, message: ChatMessage) => void;
   /** Patch top-level settings (theme, panelHeight, ...) locally and persist. */
@@ -76,6 +78,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         return { ...w, trophies: { ...w.trophies, [bossId]: { count: Math.min((old?.count || 0) + 1, 9999), firstAt: old?.firstAt || Date.now() } } };
       });
       bar.addTrophy(id, bossId);
+    },
+    addAchievement: (id: string, achId: string) => {
+      mapWorkspace(id, (w) => (w.achievements?.[achId] ? w : { ...w, achievements: { ...w.achievements, [achId]: { at: Date.now() } } }));
+      bar.addAchievement(id, achId);
     },
     persistMessage: (wsId: string, message: ChatMessage) => {
       mapWorkspace(wsId, (w) => ({ ...w, messages: [...(w.messages || []), message] }));

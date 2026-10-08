@@ -83,6 +83,17 @@ export interface Workspace {
   archive: ArchivedAgent[];
   /** Map bosses defeated, by boss id ("boss:forest"). */
   trophies: Record<string, { count: number; firstAt: number }>;
+  /** Earned achievements by id (main allowlists the ids). Never removed once earned. */
+  achievements: Record<string, { at: number }>;
+  /** Lifetime counters the achievements read (main clamps what the renderer reports). */
+  stats: WorkspaceStats;
+}
+
+export interface WorkspaceStats {
+  bestCombo: number;
+  crits: number;
+  agents: number;
+  mapsSeen: string[];
 }
 
 export interface Settings {
@@ -188,6 +199,12 @@ export interface Bar {
   updateWorkspace(id: string, patch: Partial<Pick<Workspace, 'kills' | 'map'>>): Promise<Settings>;
   /** A map boss was defeated: adds it to the workspace's trophies (main validates the boss id). */
   addTrophy(id: string, bossId: string): Promise<Settings>;
+  /** An achievement was earned (main validates the id; a repeat is ignored). */
+  addAchievement(id: string, achId: string): Promise<Settings>;
+  /** Counter changes since the last flush: `crits` and `agents` are added, `bestCombo` is a max, `mapsSeen` is merged. */
+  addStats(id: string, delta: Partial<WorkspaceStats>): Promise<Settings>;
+  /** The silent first-load unlock of already-earned achievements is done (sets the migration flag). */
+  achievementsBackfilled(): Promise<Settings>;
 
   setClickThrough(ignore: boolean): void;
   focus(): void;
