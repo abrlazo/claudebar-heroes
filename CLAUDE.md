@@ -18,8 +18,8 @@ npm start        # vite build, then launch Electron
 npm run dev      # same as start, but opens DevTools
 npm run watch    # rebuild the React UI on save (then Status -> Restart App)
 npm run typecheck # tsc --noEmit over src/renderer
-npm run check     # roster, hero-design validator and aura-width checks (tools/check-roster.mjs, tools/check-aura.mjs)
-npm run simulate  # build, then run simulated /<agent> invocations, delegation, a boss fight (fake claude `LONGRUN` prompt) and check the UI (tools/simulate-agents.mjs)
+npm run check     # roster, hero-design validator, aura-width, archive/idle and archive-drawer layout checks (tools/check-roster.mjs, tools/check-aura.mjs, tools/check-archive.mjs, tools/check-drawer.mjs for the drawer's window layout)
+npm run simulate  # build, then run simulated /<agent> invocations, delegation, a boss fight (fake claude `LONGRUN` prompt), idle retirement and the archive (short idle time through `__cbhIdleMs`) and check the UI (tools/simulate-agents.mjs)
 ```
 
 The renderer is a React app bundled by Vite into `dist/renderer` (git-ignored); `main.js` loads that folder. Edit `src/renderer`, never `dist`.
@@ -36,7 +36,7 @@ The app spawns Claude Code headlessly (`claude -p --output-format stream-json`) 
 
 **main.js** - Window lifecycle, IPC routing, panel positioning
 - Manages frameless, transparent, always-on-top window
-- Handles dragging, panel open/close, position persistence
+- Handles dragging, panel open/close, position persistence; the window is 608 px wider only while the archive drawer is open
 - Routes IPC calls between renderer and backend services
 
 **claude.js** - Claude Code subprocess management
@@ -112,7 +112,7 @@ The only way for the user to start an agent is `/<agent-name> <task>` at the sta
 
 **Chains**: `/a <task> && /b [task] [&& /c]` (`parseAgentChain` in `lib/agents.ts`, max `MAX_CHAIN_STEPS` = 3). Every step must be a known agent, otherwise it is not a chain and the text is handled as a single message. The first step starts as above; the rest are queued in `useAgents` (`chains`, keyed by the running agent, with the workspace it started in; not persisted, no tab or orb until they start). When an agent ends cleanly the next step starts in that workspace; its task is the step's own text, else (`handoffTask`) the previous agent's final message, or "Implement the findings in .claude/review.md" after `feature-planner` when the file exists (`bar.projectHasReview`, path taken from the workspace in main), else the chain stops with "no findings to implement". An error, non-zero exit, Stop, or closing the tab drops the rest with a meta message in the Expedition chat. If `MAX_AGENTS` are already running at hand-off, the chain stops with a message (it does not wait).
 4. `bar.runAgent` -> `agents:run` starts ONE Claude process: `claude -p ... --agent <name>`, in the project folder, with the permission mode chosen in the footer (headless runs cannot ask, so tools like Bash need *Accept edits* or *Bypass perms*).
-5. The agent gets a tab named after it (`gitama`, then `gitama 2` for a second run), its own log and a spirit orb. The user's `/<agent> <task>` line stays in the Expedition chat, the task is the first message in the agent's tab.
+5. The agent gets a tab named after it (`gitama`, then `gitama 2` for a second run), its own log and a spirit orb. In the tab row under the panel's **Expedition** tab, the project chat's own tab is labelled **Quest** (`AgentTabs.tsx`); the rest of these docs say "Expedition chat" for that chat. The user's `/<agent> <task>` line stays in the Expedition chat, the task is the first message in the agent's tab.
 
 **The "/" suggestion popup** (Expedition composer only): typing `/` at the start of the text opens a list above the box (`components/common/CommandPopup.tsx`, driven by `Composer`). It lists agents, Claude's own commands (built-ins, skills, custom commands; `main/command-catalog.js`) plus the app's own `summon` and `/plan`. `/plan` is not a headless Claude command: `App.tsx` (`PLAN_COMMAND`) turns it into the *Plan only* permission mode and sends the rest as the task. `/help` and similar terminal-only commands do not run headless and are not listed. Typing narrows it (names that start with the text first, then ones that contain it); Up/Down moves, Enter or Tab picks (inserts `/name ` and does not send), Esc closes only the popup. Picking a skill or custom command just fills the box: sent as an ordinary message, Claude runs it. Picking an agent and adding a task starts it (see above). Add new kinds of command in `command-catalog.js` and `lib/commands.ts`.
 
@@ -121,7 +121,10 @@ The only way for the user to start an agent is `/<agent-name> <task>` at the sta
 **Agent lifecycle**:
 - Status: idle → running → done
 - Minions animate in on spawn, animate out (death animation) on completion
-- Finished agents stay (tab + orb) until closed with their ✕; you can keep messaging them
+- Finished agents stay (tab + orb) while you use them and **retire to the archive after `IDLE_RETIRE_MS` (2 minutes, `lib/agents.ts`) without activity**. Activity = any event from the agent, a message to it, opening its tab or leaving it. The open tab never counts down. A finished agent's tab shows the time left (`1:23`, `AgentTabs`, clock only while the panel is visible and only re-rendering the tab row). A RUNNING agent is never retired or stopped; after the idle time without an event its tab only shows a `quiet m:ss` hint. `useAgents` keeps ONE `setTimeout` for the earliest due agent (`lib/idle.ts`: `nextDeadline`, `dueAgents`, `idleState`; re-planned when `idleKey` changes, cleared on unmount), for agents of every project (each carries `wsId`); a previous chain step stays until `advance` has read its log (`handingOff`). Retiring = `retire(id, reason)`: `archive` (`SettingsContext.archiveAgent` -> `agents:archive`), then the death animation, then removal; if the user touched the agent meanwhile it stays
+- **Closing with ✕ archives too (`reason: 'closed'`).** Behaviour change: ✕ on a RUNNING agent now stops it first (chain dropped) and archives it as `cancelled`; before, it only hid the tab and left the process running. For a running observed (delegated) agent there is no process to stop: its partial log is archived as `cancelled` and the Expedition run goes on. Observed agents retire like others once finished (record `observed: true`, `sessionId: null`)
+- The archive is per project (`workspace.archive`, newest last, opened with the `Archive (n)` pill, always shown in the Expedition tab row (also `Archive (0)`), as a **drawer** (`components/panel/ArchiveDrawer.tsx`, a sibling of `Panel` in `App.tsx`, not inside `#panel`): the chat list (newest first, default selection = newest, `.archive-item`, never `.agent-tab`) on the left and the read-only `MessageLog` of the selected chat on the right; delete one / clear all with a two-step confirm. The drawer is 600 px wide plus an 8 px gap, as tall as the panel, and the composer stays usable while it is open. It is a companion of the panel: closing the panel closes it, and Esc closes the "/" popup first, then the drawer, then the panel (`usePanel` owns `drawerOpen`, `toggleDrawer` and the body classes `drawer-left|right|overlay|open`). **Window strategy:** the renderer only asks (`bar.drawerMode()`, `bar.setDrawerOpen(bool)` -> `panel:drawerMode` / `panel:setDrawer`, validated in main; `bar.onDrawerMode` after a drag); main picks the mode with `main/drawer-layout.js` (`chooseDrawerMode`: `left` if the strip has 608 px free on the left of its display's work area, else `right`, else `overlay`) and sets the window rectangle (`windowRect`, `applyBounds`). The window is wider by 608 px only while the drawer is open (to the left, so its x is the strip's minus 608, or to the right; `overlay` does not grow it); `windowPos` stays the strip's top-left and CSS anchors `#strip`/`#panel` to the edge that does not move (`--main-w`, `body.drawer-left|right`), so the strip and hero never move. The transparent area around the drawer stays click-through (only `.interactive` takes the mouse; the drawer has it). `CBH_FORCE_DRAWER_MODE=overlay` (main-process environment, tests only) forces overlay on big displays. Written only by main through `agents:archive` / `archive:delete` / `archive:clear` (`main.js` -> `settings.archiveAgent` etc.); the renderer sends a record for ONE project by id, `main/archive.js` (`cleanArchived`) rebuilds it from an allowlist (`archivedAt` is set by main), `agents:archive` refuses a process that is still running or an agent live in another project, `settings:set` drops `archive`, `settings:update` and `workspace:update` never take it, `load()` cleans it (and clears stale `agents` records). Caps: 20 chats per project (oldest dropped), 200 messages per chat (the first one, the task, is kept, plus one "N earlier messages omitted" line), 4000 chars per message, 40 000 per chat. Removing a project removes its archive. Not archived: agents still live when the app quits (their logs exist only in the renderer); resuming an archived chat is not supported (`sessionId` is kept for it)
+- Test seam: `globalThis.__cbhIdleMs` (renderer only, number >= 500) replaces the 2 minutes, like `__cbhBossChance`; never reachable from settings or IPC
 - All events from agents stream to their respective tabs
 - With an agent tab open, the composer messages that agent (`useAgents.message` -> `agents:message` IPC resumes its Claude session); the view stays on the agent's tab and the main chat is untouched
 
@@ -150,6 +153,13 @@ The only way for the user to start an agent is `/<agent-name> <task>` at the sta
       "contextWindow": 200000,
       "trophies": { "boss:forest": { "count": 1, "firstAt": timestamp } },
       "heroDesign": null | { cls, weapon, body, gear, hair, shield, cape, stache, glasses, colors: {...}, stats: {...}, at },
+      "archive": [
+        { "id": "agent-id", "name": "gitama 2", "definition": "gitama", "task": "first message",
+          "observed": false, "status": "done" | "error" | "cancelled", "reason": "idle" | "closed",
+          "startedAt": timestamp, "endedAt": timestamp, "archivedAt": timestamp,
+          "usage": { input, output, cacheRead, cacheCreate }, "sessionId": "claude-session-id" | null,
+          "messages": [ /* ChatMessage, clamped by main/archive.js */ ] }
+      ],
       "agents": [
         {
           "id": "uuid",
@@ -227,6 +237,10 @@ EOF
 | `main/claude.js` | Claude subprocess, event parsing |
 | `main/agents.js` | Concurrent agent processes |
 | `main/agent-definitions.js` | Reads the agent definitions under `.claude/agents/` |
+| `main/archive.js` | Validates and clamps archived agent chats (`cleanArchived`, `cleanArchive`); no electron import, `tools/check-archive.mjs` tests it |
+| `renderer/lib/idle.ts` | Pure idle rules: which finished agents are due, the tab's countdown / quiet state |
+| `renderer/components/panel/ArchiveDrawer.tsx` | The project's archive drawer: chat list and read-only chat view, beside the panel |
+| `main/drawer-layout.js` | Pure drawer geometry: mode (`left`/`right`/`overlay`) and window rectangle; no electron import, `tools/check-drawer.mjs` tests it |
 | `main/command-catalog.js` | Lists agents plus Claude's own commands (built-ins, skills, custom commands) for the "/" popup |
 | `main/frontmatter.js` | Reads name / description / argument-hint from a markdown header |
 | `main/settings.js` | State persistence, workspace/agent data |
