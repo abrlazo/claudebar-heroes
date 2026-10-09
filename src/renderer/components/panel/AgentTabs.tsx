@@ -20,6 +20,9 @@ interface AgentTabsProps {
   onToggleArchive: () => void;
   /** The panel tab is on screen; no clock runs while it is hidden. */
   visible: boolean;
+  /** Agents with a permission request waiting, and whether the Quest chat has one. */
+  asking: ReadonlySet<string>;
+  questAsking: boolean;
 }
 
 const NONE: ReadonlySet<string> = new Set();
@@ -34,7 +37,7 @@ function useClock(enabled: boolean): void {
   }, [enabled]);
 }
 
-export function AgentTabs({ agents, selectedId, onSelect, onRemove, archiveCount, archiveOpen, onToggleArchive, visible }: AgentTabsProps) {
+export function AgentTabs({ agents, selectedId, onSelect, onRemove, archiveCount, archiveOpen, onToggleArchive, visible, asking, questAsking }: AgentTabsProps) {
   const ticking = visible && agents.some((a) => !a.dying && a.id !== selectedId);
   useClock(ticking); // only to re-render once a second; the time itself is read below so it is never older than the agent's last activity
   const now = Date.now();
@@ -43,6 +46,7 @@ export function AgentTabs({ agents, selectedId, onSelect, onRemove, archiveCount
     <div id="agent-tabs" className="agent-tabs">
       <button type="button" className={`agent-tab${selectedId === null ? ' active' : ''}`} onClick={() => onSelect(null)}>
         Quest
+        {questAsking && selectedId !== null && <span className="asking" title="Quest is waiting for your permission" aria-label="waiting for your permission">!</span>}
       </button>
       {agents.map((agent) => {
         const idle = idleState(agent, now, limit, selectedId, NONE);
@@ -55,6 +59,7 @@ export function AgentTabs({ agents, selectedId, onSelect, onRemove, archiveCount
           >
             <span>{agent.name}</span>
             <span className="status">{agent.status}</span>
+            {asking.has(agent.id) && <span className="asking" title="Waiting for your permission" aria-label="waiting for your permission">!</span>}
             {idle.kind === 'counting' && (
               <span className="idle" title={`Retires to the archive in ${clock(idle.leftMs)} unless you open it or message it`}>{clock(idle.leftMs)}</span>
             )}

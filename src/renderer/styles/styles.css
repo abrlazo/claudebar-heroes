@@ -621,6 +621,51 @@ body.theme-light .panel-resize:hover {
 .queue-x { flex: none; background: none; border: none; color: var(--muted); font-size: 14px; line-height: 1; padding: 0 2px; cursor: pointer; }
 .queue-x:hover, .queue-btn:hover { color: var(--text, #fff); }
 
+/* ---------- Permission requests ("Ask me each time") ---------- */
+
+/* A card is only ever plain text: the detail block scrolls and wraps anywhere, so one huge line cannot hide the end. */
+.perm-stack { flex: none; max-height: 40%; min-height: 0; display: flex; }
+.perm-card {
+  flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 4px;
+  background: #3a3320; border: 1px solid #e0a030; border-left-width: 4px; border-radius: 8px; padding: 6px 8px; font-size: 12px;
+}
+.perm-card:focus { outline: none; }
+.perm-head { display: flex; align-items: baseline; gap: 6px; }
+.perm-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.perm-count { flex: none; font-size: 10px; color: var(--muted); }
+.perm-path { font-weight: bold; overflow-wrap: anywhere; word-break: break-all; max-height: 3.6em; overflow-y: auto; user-select: text; }
+.perm-summary { overflow-wrap: anywhere; user-select: text; }
+.perm-detail {
+  margin: 0; flex: 1 1 auto; min-height: 2.6em; overflow: auto; padding: 4px 6px; border-radius: 6px; user-select: text;
+  background: rgba(0, 0, 0, 0.35); font: inherit; font-size: 11px; white-space: pre-wrap; word-break: break-all;
+}
+.perm-more { font-size: 10px; color: #e0a030; }
+.perm-actions { flex: none; display: flex; align-items: center; gap: 6px; }
+.perm-btn { padding: 2px 12px; border-radius: 6px; font-size: 12px; }
+.perm-allow { background: #2e6b3f; border-color: #4fae6a; color: #fff; }
+.perm-deny { background: #6b2e2e; border-color: #c05a5a; color: #fff; }
+.perm-btn:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+.perm-timer { margin-left: auto; font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+body.theme-light .perm-card { background: #fff4d6; border-color: #b8860b; }
+body.theme-light .perm-detail { background: rgba(0, 0, 0, 0.07); }
+body.theme-light .perm-more { color: #8a5d00; }
+body.theme-light .perm-allow { background: #2e7d46; border-color: #1f5c32; }
+body.theme-light .perm-deny { background: #b03a3a; border-color: #7e2222; }
+.agent-tab .asking {
+  display: inline-block; min-width: 14px; height: 14px; line-height: 14px; margin-left: 4px; border-radius: 7px; text-align: center;
+  background: #e0a030; color: #1a1a2e; font-size: 10px; font-weight: bold; animation: perm-blink 1.2s ease-in-out infinite;
+}
+/* Panel closed or not: while something waits, the strip pulses amber and the waiting wisp glows. */
+body.perm-pending #strip { border-color: #e0a030; animation: perm-pulse 1.4s ease-in-out infinite; }
+.minion.asking canvas { animation: minion-float 2.4s ease-in-out infinite; filter: drop-shadow(0 0 3px #e0a030) drop-shadow(0 0 8px #e0a030) brightness(1.4); }
+@keyframes perm-pulse { 0%, 100% { box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3), 0 0 0 0 rgba(224, 160, 48, 0); } 50% { box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3), 0 0 14px 3px rgba(224, 160, 48, 0.9); } }
+@keyframes perm-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+@media (prefers-reduced-motion: reduce) {
+  body.perm-pending #strip { animation: none; box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3), 0 0 10px 2px rgba(224, 160, 48, 0.9); }
+  .agent-tab .asking { animation: none; }
+  .minion.asking canvas { animation: none; }
+}
+
 /* ---------- Hero stats ---------- */
 
 .hero-title { font-size: 15px; font-weight: bold; color: #ffd166; margin: 4px 0 0; }

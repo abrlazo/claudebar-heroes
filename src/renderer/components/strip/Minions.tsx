@@ -26,8 +26,8 @@ function orbitStyle(index: number): React.CSSProperties {
 }
 
 /** One wisp per agent, orbiting the hero's body. */
-function Minion({ agent, register }: {
-  agent: Agent; register: (id: string, el: HTMLDivElement | null) => void;
+function Minion({ agent, asking, register }: {
+  agent: Agent; asking: boolean; register: (id: string, el: HTMLDivElement | null) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // The wisp is painted once; orbit, wobble and glow are CSS animations.
@@ -40,8 +40,8 @@ function Minion({ agent, register }: {
   return (
     <div
       ref={(el) => register(agent.id, el)}
-      className={`minion${agent.dying ? ' dying' : ''}${calm ? ' calm' : ''}`}
-      title={`${agent.name} (${agent.hero.name} the ${agent.hero.cls})`}
+      className={`minion${agent.dying ? ' dying' : ''}${calm ? ' calm' : ''}${asking ? ' asking' : ''}`}
+      title={`${agent.name} (${agent.hero.name} the ${agent.hero.cls})${asking ? ' - waiting for your permission' : ''}`}
       style={orbitStyle(agent.index)}
     >
       <div className="wisp">
@@ -61,7 +61,7 @@ function Minion({ agent, register }: {
  * change the engine is told which agents are working and which element is theirs, so it
  * can fire projectiles from the wisp.
  */
-export function Minions({ agents, game }: { agents: Agent[]; game: GameApi }) {
+export function Minions({ agents, asking, game }: { agents: Agent[]; asking: ReadonlySet<string>; game: GameApi }) {
   const els = useRef(new Map<string, HTMLDivElement>());
   const register = (id: string, el: HTMLDivElement | null) => {
     if (el) els.current.set(id, el);
@@ -79,6 +79,6 @@ export function Minions({ agents, game }: { agents: Agent[]; game: GameApi }) {
   }, [layoutKey, game]);
 
   return agents.map((agent) => (
-    <Minion key={agent.id} agent={agent} register={register} />
+    <Minion key={agent.id} agent={agent} asking={asking.has(agent.id)} register={register} />
   ));
 }
