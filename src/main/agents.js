@@ -18,7 +18,9 @@ function spawn({ wsId, agentId, agentName, definitionName = null, prompt, cwd, p
 
   settings.updateAgent(wsId, agentId, { status: 'running', startTime: Date.now(), sessionId });
 
-  const handle = claude.run({ prompt, cwd, sessionId, permissionMode, agent: definitionName }, (event) => {
+  // "Ask me each time" (permission mode 'default') lets the agent ask for permission through the app; the other modes never ask.
+  const promptMode = permissionMode === 'default' ? 'host' : 'plain';
+  const handle = claude.run({ prompt, cwd, sessionId, permissionMode, agent: definitionName, promptMode }, (event) => {
     if (event.type === 'session') {
       settings.updateAgent(wsId, agentId, { sessionId: event.sessionId });
     } else if (event.type === 'usage') {
@@ -48,6 +50,17 @@ function cancelAgent(agentId) {
   }
 }
 
+/** The user's answer to a permission request of this agent's process. False unless that request is pending there. */
+function answerPermission(agentId, requestId, decision) {
+  const agent = agents.get(agentId);
+  return !!agent && agent.handle.running && agent.handle.answerPermission(requestId, decision);
+}
+
+/** Denies every pending permission request of every agent (the window reloaded: nobody can see the cards). */
+function denyAllPermissions() {
+  for (const agent of agents.values()) agent.handle.denyPending?.();
+}
+
 function isRunning(agentId) {
   return agents.has(agentId) && agents.get(agentId).handle.running;
 }
@@ -63,4 +76,4 @@ function cancelAll() {
   agents.clear();
 }
 
-module.exports = { spawn, cancelAgent, isRunning, getActiveAgentCount, cancelAll };
+module.exports = { spawn, cancelAgent, isRunning, getActiveAgentCount, cancelAll, answerPermission, denyAllPermissions };

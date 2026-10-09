@@ -5,6 +5,7 @@ const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const permissions = require('./permissions');
 
 const isWin = process.platform === 'win32';
 
@@ -43,16 +44,32 @@ function resolveClaudeBinary() {
 }
 
 
+// "Ask me each time": Claude asks the app before a risky tool runs. Verified with Claude Code 2.1.292:
+// stream-json on stdin plus `--permission-prompt-tool stdio` makes Claude send `control_request` (`can_use_tool`)
+// lines and wait for a `control_response`. The flag is hidden from `--help`; the other modes never use it.
+const HOST_ARGS = ['--input-format', 'stream-json', '--permission-prompt-tool', 'stdio'];
+const HOST_UNSUPPORTED_HINT = ' This Claude version cannot ask for permission through the app: pick Accept edits or Bypass perms in the footer, or update Claude Code.';
+const DEFAULT_PERMISSION_TIMEOUT_MS = 5 * 60 * 1000;
+
+// An unanswered request is denied after this long. CBH_PERMISSION_TIMEOUT_MS is a test seam: read here, in the
+// main process only (never from settings or the renderer); values below 500 are ignored.
+function permissionTimeoutMs() {
+  const fromEnv = Number(process.env.CBH_PERMISSION_TIMEOUT_MS);
+  return Number.isFinite(fromEnv) && fromEnv >= 500 ? fromEnv : DEFAULT_PERMISSION_TIMEOUT_MS;
+}
+
 /**
  * @param {object} opts
  * @param {string} opts.prompt
  * @param {string} opts.cwd
  * @param {string|null} opts.sessionId  resume this session if set
  * @param {string} opts.permissionMode
+ * @param {'plain'|'host'} [opts.promptMode]  'host' = Claude asks the app for permission (see HOST_ARGS); default 'plain'
  * @param {(event: object) => void} emit
- * @returns {{cancel: function, running: boolean}} handle
+ * @returns {{cancel: function, running: boolean, answerPermission: function, pendingPermissions: function}} handle
  */
-function run({ prompt, cwd, sessionId, permissionMode, model, agent }, emit) {
+function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode = 'plain' }, emit) {
+  const host = promptMode === 'host';
   const args = [
     '-p',
     '--output-format', 'stream-json',
@@ -64,24 +81,67 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent }, emit) {
   if (model) args.push('--model', model);
   // Run as a named agent from .claude/agents (the caller has already validated the name).
   if (agent && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(agent)) args.push('--agent', agent);
+  if (host) args.push(...HOST_ARGS);
 
   const bin = resolveClaudeBinary();
   emit({ type: 'start' });
 
   let child = null;
+  // Requests Claude is waiting on (host mode). The broker is the only thing that can say "allow".
+  const broker = host ? permissions.createBroker({
+    timeoutMs: permissionTimeoutMs(),
+    onTimeout: ({ requestId, response }) => {
+      const wrote = writeLine(permissions.buildControlResponse(requestId, response));
+      emit({ type: 'permission-resolved', requestId, how: wrote ? 'timeout' : 'ended' });
+    },
+  }) : null;
+  const writeLine = (line) => {
+    const stdin = child?.stdin;
+    if (!stdin || stdin.destroyed || !stdin.writable) return false;
+    try { stdin.write(line); return true; } catch { return false; }
+  };
+  const endInput = () => { try { if (child?.stdin && !child.stdin.destroyed) child.stdin.end(); } catch { /* already closed */ } };
+  // Anything still pending when the process is over can never be answered.
+  const dropPending = () => {
+    if (!broker) return;
+    for (const requestId of broker.clear()) emit({ type: 'permission-resolved', requestId, how: 'ended' });
+  };
   // 'end' must be emitted exactly once: the renderer stays "busy" until it
   // arrives, and a spawn failure may fire 'error' without 'close'.
   const finish = (code) => {
     if (!handle.running) return;
     handle.running = false;
+    dropPending();
     emit({ type: 'end', code });
   };
   const handle = {
     running: true,
     cancel() {
       if (!child || !handle.running) return;
+      handle.denyPending();
       if (isWin) spawn('taskkill', ['/pid', String(child.pid), '/t', '/f']);
       else child.kill('SIGINT');
+      if (host) endInput();
+    },
+    /** The user's answer to a pending request. False when it is not pending in THIS run (unknown, repeated, forged). */
+    answerPermission(requestId, decision) {
+      if (!broker || !handle.running) return false;
+      const answer = broker.answer(requestId, decision);
+      if (!answer.ok) return false;
+      const wrote = writeLine(permissions.buildControlResponse(requestId, answer.response));
+      emit({ type: 'permission-resolved', requestId, how: !wrote ? 'ended' : decision === 'allow' ? 'allowed' : 'denied' });
+      return wrote;
+    },
+    pendingPermissions() {
+      return broker ? broker.pending() : [];
+    },
+    /** Denies every pending request but lets the run go on (nobody can see the cards any more). */
+    denyPending() {
+      if (!broker || !handle.running) return;
+      for (const { requestId, response } of broker.denyAll('stopped')) {
+        writeLine(permissions.buildControlResponse(requestId, response));
+        emit({ type: 'permission-resolved', requestId, how: 'stopped' });
+      }
     },
   };
 
@@ -96,12 +156,15 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent }, emit) {
   // If the binary is missing, writing the prompt raises EPIPE on stdin; an
   // unhandled stream 'error' would crash the main process.
   child.stdin.on('error', () => {});
-  // Prompt goes over stdin so quoting and length are never an issue.
-  child.stdin.end(prompt);
+  // Prompt goes over stdin so quoting and length are never an issue. In host mode the pipe stays open (Claude
+  // needs it for the answers) until the `result` event; closing it early makes Claude finish without asking.
+  if (host) writeLine(permissions.buildUserLine(prompt));
+  else child.stdin.end(prompt);
 
   let buffer = '';
   let stderr = '';
   const state = { streamedText: false, subagents: new Map() };
+  let sawSession = false;
 
   child.stdout.on('data', (chunk) => {
     buffer += chunk.toString();
@@ -111,7 +174,11 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent }, emit) {
       buffer = buffer.slice(nl + 1);
       if (!line) continue;
       try {
-        handleMessage(JSON.parse(line), emit, state);
+        const msg = JSON.parse(line);
+        if (msg.type === 'system' && msg.subtype === 'init') sawSession = true;
+        if (host && (msg.type === 'control_request' || msg.type === 'control_cancel_request')) handleControl(msg, { broker, emit, writeLine });
+        else handleMessage(msg, emit, state);
+        if (host && msg.type === 'result') { dropPending(); endInput(); }
       } catch {
         // Ignore non-JSON lines.
       }
@@ -132,11 +199,41 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent }, emit) {
   });
 
   child.on('close', (code) => {
-    if (code !== 0 && stderr.trim() && handle.running) emit({ type: 'error', message: stderr.trim() });
+    if (code !== 0 && stderr.trim() && handle.running) {
+      // A Claude that does not know the host flags says so before it starts any session.
+      const unsupported = host && !sawSession && /unknown option|invalid.*--permission|--permission-prompt-tool/i.test(stderr);
+      emit({ type: 'error', message: stderr.trim() + (unsupported ? HOST_UNSUPPORTED_HINT : '') });
+    }
     finish(code);
   });
 
   return handle;
+}
+
+/**
+ * Claude's `control_request` lines in host mode. `can_use_tool` becomes a 'permission' event (or is answered at once
+ * for tools that need a conversation the app cannot show); anything else is answered "unsupported" so Claude never waits.
+ */
+function handleControl(msg, { broker, emit, writeLine }) {
+  if (msg.type === 'control_cancel_request') {
+    const gone = broker.cancel(msg.request_id);
+    if (gone.ok) emit({ type: 'permission-resolved', requestId: msg.request_id, how: 'cancelled' });
+    return;
+  }
+  const requestId = msg.request_id;
+  if (typeof requestId !== 'string' || !requestId) return;
+  const request = msg.request;
+  if (request?.subtype !== 'can_use_tool') {
+    writeLine(permissions.buildErrorResponse(requestId, 'unsupported'));
+    return;
+  }
+  if (permissions.isInteractiveOnly(request)) {
+    writeLine(permissions.buildControlResponse(requestId, broker.denial('interactive')));
+    return;
+  }
+  const added = broker.add(msg);
+  if (added.ok) emit({ type: 'permission', ...added.view });
+  else if (added.reason === 'full') writeLine(permissions.buildControlResponse(requestId, broker.denial('full')));
 }
 
 // Claude's own delegations: its Agent tool (called Task in older versions) with a `subagent_type`.

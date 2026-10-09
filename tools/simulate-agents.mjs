@@ -32,10 +32,16 @@ stream_in=0
 while [ $# -gt 0 ]; do if [ "$1" = "--resume" ]; then resume="$2"; fi; if [ "$1" = "--agent" ]; then agent="$2"; fi; if [ "$1" = "--permission-mode" ]; then mode="$2"; fi; if [ "$1" = "--input-format" ]; then stream_in=1; fi; shift; done
 if [ "$stream_in" = "1" ]; then
   read -r request
-  printf '%s\\n' '{"type":"control_response","response":{"subtype":"success","request_id":"cmd-list","response":{"commands":[{"name":"compact","description":"Free up context by summarizing the conversation so far","argumentHint":"<optional custom summarization instructions>"},{"name":"context","description":"Show current context usage","argumentHint":""},{"name":"model","description":"Set the AI model for Claude Code","argumentHint":"<model>"},{"name":"doctor","description":"Diagnose the setup","argumentHint":""},{"name":"__remote-workflow","description":"Internal","argumentHint":""},{"name":"deploy","description":"A real skill","argumentHint":""},{"name":"ship","description":"A custom command","argumentHint":"<env>"},{"name":"git:sync","description":"A namespaced command","argumentHint":""},{"name":"docx","description":"Word documents (claude.ai sync)","argumentHint":""}]}}}'
-  exit 0
+  if [[ "$request" == *'"subtype":"initialize"'* ]]; then
+    printf '%s\\n' '{"type":"control_response","response":{"subtype":"success","request_id":"cmd-list","response":{"commands":[{"name":"compact","description":"Free up context by summarizing the conversation so far","argumentHint":"<optional custom summarization instructions>"},{"name":"context","description":"Show current context usage","argumentHint":""},{"name":"model","description":"Set the AI model for Claude Code","argumentHint":"<model>"},{"name":"doctor","description":"Diagnose the setup","argumentHint":""},{"name":"__remote-workflow","description":"Internal","argumentHint":""},{"name":"deploy","description":"A real skill","argumentHint":""},{"name":"ship","description":"A custom command","argumentHint":"<env>"},{"name":"git:sync","description":"A namespaced command","argumentHint":""},{"name":"docx","description":"Word documents (claude.ai sync)","argumentHint":""}]}}}'
+    exit 0
+  fi
+  # "Ask me each time" runs (permission mode default) send the prompt as ONE stream-json user line and keep stdin open
+  # for permission answers; pull the text out of it so every phase below works unchanged.
+  prompt=$(printf '%s' "$request" | "$FAKE_NODE" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).message.content[0].text)}catch{}})')
+else
+  prompt=$(cat)
 fi
-prompt=$(cat)
 sid="sim-$RANDOM"
 # "Design this hero" (a one-shot --output-format json call): count it, then answer by name.
 if [[ "$prompt" == *"You design pixel-art RPG heroes"* ]]; then
@@ -191,7 +197,7 @@ const loseConnection = (why) => {
 const stopping = new WeakSet(); // children and sockets we ended on purpose
 const launch = (dir, env = {}) => {
   const child = spawn(electronBin, [root, `--user-data-dir=${dir}`, `--remote-debugging-port=${port}`], {
-    env: { ...process.env, CLAUDE_BIN: fake, FAKE_COUNT: path.join(work, 'design-count.txt'), FAKE_RUNS: path.join(work, 'runs.txt'), ...env }, stdio: 'ignore',
+    env: { ...process.env, CLAUDE_BIN: fake, FAKE_NODE: process.execPath, FAKE_COUNT: path.join(work, 'design-count.txt'), FAKE_RUNS: path.join(work, 'runs.txt'), ...env }, stdio: 'ignore',
   });
   child.on('exit', (code, signal) => { if (!stopping.has(child)) loseConnection(`the app exited by itself (code ${code}, signal ${signal})`); });
   child.on('error', (e) => loseConnection(`the app could not start: ${e.message}`));

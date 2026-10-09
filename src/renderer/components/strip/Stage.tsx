@@ -9,6 +9,8 @@ export interface StageProps {
   hasWorkspace: boolean;
   onImport: () => void;
   agents: Agent[];
+  /** Agents with a permission request waiting (their wisp pulses). */
+  asking: ReadonlySet<string>;
   game: GameApi;
   dragProps: DragProps;
 }
@@ -17,7 +19,7 @@ export interface StageProps {
  * The battle viewport. React owns the fixed nodes (scene canvas, hero, fade,
  * minions); the engine appends enemies and damage numbers to the stage itself.
  */
-export function Stage({ refs, bubble, hasWorkspace, onImport, agents, game, dragProps }: StageProps) {
+export function Stage({ refs, bubble, hasWorkspace, onImport, agents, asking, game, dragProps }: StageProps) {
   return (
     <div id="stage" ref={refs.stageRef} {...dragProps}>
       <canvas id="scene" ref={refs.sceneCanvasRef} />
@@ -26,7 +28,7 @@ export function Stage({ refs, bubble, hasWorkspace, onImport, agents, game, drag
         <canvas id="hero-canvas" ref={refs.heroCanvasRef} />
         {bubble && <div id="bubble">{bubble}</div>}
       </div>
-      <Minions agents={agents} game={game} />
+      <Minions agents={agents} asking={asking} game={game} />
       {!hasWorkspace && <button id="empty" onClick={onImport}>＋ Import a project to summon a hero</button>}
       <div id="fade" ref={refs.fadeRef} />
     </div>

@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld('bar', {
   messageAgent: (wsId, agentId, sessionId, definitionName, prompt, cwd, permissionMode) => ipcRenderer.send('agents:message', { wsId, agentId, sessionId, definitionName, prompt, cwd, permissionMode }),
   projectHasReview: (wsId) => ipcRenderer.invoke('agents:hasReview', wsId),
   cancelAgent: (wsId, agentId) => ipcRenderer.invoke('agents:cancel', { wsId, agentId }),
+  answerPermission: (target, agentId, requestId, decision) => ipcRenderer.invoke('permission:answer', { target, agentId, requestId, decision }),
   archiveAgent: (wsId, record) => ipcRenderer.invoke('agents:archive', wsId, record),
   deleteArchived: (wsId, id) => ipcRenderer.invoke('archive:delete', wsId, id),
   clearArchive: (wsId) => ipcRenderer.invoke('archive:clear', wsId),

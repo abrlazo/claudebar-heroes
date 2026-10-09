@@ -6,6 +6,7 @@ import { MAX_AGENTS, REVIEW_AGENT, handoffTask, idleLimitMs, uniqueAgentName } f
 import { dueAgents, nextDeadline } from '../lib/idle';
 import type { AgentInvocation } from '../lib/agents';
 import type { GameApi } from './useGameEngine';
+import type { PermissionsApi } from './usePermissions';
 import type { AgentDefinition, AgentEvent, ArchivedAgent, ChatMessage, ClaudeEvent, Hero, PermissionMode, Usage, Workspace } from '../types';
 
 const DEATH_ANIMATION_MS = 600;
@@ -109,6 +110,8 @@ export interface AgentsApi {
   observe: (ev: ClaudeEvent) => boolean;
   /** The Expedition run in `wsId` ended: finish the agents Claude delegated to (cancelled when it was stopped). */
   endObserved: (wsId: string, cancelled: boolean) => void;
+  /** Adds a meta line (not a user message) to an agent's log, e.g. what the user allowed or denied. */
+  logMeta: (agentId: string, text: string) => void;
 }
 
 /**
@@ -117,7 +120,7 @@ export interface AgentsApi {
  * truth is `agentsRef` so event handlers never read stale state; `agents`
  * mirrors it for rendering.
  */
-export function useAgents({ game, say, notify, archive, onUnclaimed }: {
+export function useAgents({ game, say, notify, archive, onUnclaimed, permissions }: {
   game: GameApi;
   say: (text: string, ms?: number) => void;
   /** Posts a meta message in a workspace's Expedition chat (chain progress). */
@@ -126,6 +129,8 @@ export function useAgents({ game, say, notify, archive, onUnclaimed }: {
   archive: (wsId: string, record: Omit<ArchivedAgent, 'archivedAt'>) => Promise<boolean>;
   /** An inner event of a delegation that turned out not to be a known agent: show it as an ordinary event. */
   onUnclaimed: (ev: ClaudeEvent) => void;
+  /** The permission cards: this hook feeds it the agents' requests. */
+  permissions: Pick<PermissionsApi, 'add' | 'resolve' | 'clearOwner'>;
 }): AgentsApi {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -246,6 +251,8 @@ export function useAgents({ game, say, notify, archive, onUnclaimed }: {
     const { agentId, type } = ev;
     const agent = agentsRef.current.find((a) => a.id === agentId);
     if (!agent) {
+      // A closed tab's process still reports its end: its cards can never be answered.
+      if (type === 'end') permissions.clearOwner({ kind: 'agent', agentId });
       if (spawningRef.current > 0) {
         const queue = pending.current.get(agentId) ?? [];
         queue.push(ev);
@@ -277,6 +284,16 @@ export function useAgents({ game, say, notify, archive, onUnclaimed }: {
         update(agentId, (a) => touch({ ...a, log: [...a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }] }));
         game.toolEnemy(ev.name ?? '');
         break;
+      case 'permission':
+        // A running agent waiting for the user is still running: touched (never idle-retired) and shown on its tab.
+        update(agentId, touch);
+        permissions.add({ kind: 'agent', agentId }, ev);
+        say('Needs your OK!', 3000);
+        break;
+      case 'permission-resolved':
+        update(agentId, touch);
+        if (ev.requestId) permissions.resolve(ev.requestId, ev.how ?? 'ended');
+        break;
       case 'error':
         failed.current.add(agentId);
         // claude.js puts error text in `message`, not `text`.
@@ -292,13 +309,14 @@ export function useAgents({ game, say, notify, archive, onUnclaimed }: {
         }
         break;
       case 'end':
+        permissions.clearOwner({ kind: 'agent', agentId }); // the process is gone
         if (ev.code !== 0) failed.current.add(agentId);
         complete(agentId);
         break;
       default:
         break;
     }
-  }, [complete, game, update]);
+  }, [complete, game, permissions, say, update]);
 
   useBridgeEvent<AgentEvent>(bar.onAgentEvent, handleEvent);
 
@@ -353,6 +371,10 @@ export function useAgents({ game, say, notify, archive, onUnclaimed }: {
     game.wake();
     bar.messageAgent(ws.id, agentId, agent.sessionId, agent.definition, prompt, ws.path, permissionMode);
   }, [game, update]);
+
+  const logMeta = useCallback((agentId: string, text: string) => {
+    update(agentId, (a) => ({ ...a, lastActivityAt: Date.now(), log: [...a.log, { kind: 'meta', text }] }));
+  }, [update]);
 
   const stop = useCallback((wsId: string, agentId: string) => {
     const agent = agentsRef.current.find((a) => a.id === agentId);
@@ -535,5 +557,5 @@ export function useAgents({ game, say, notify, archive, onUnclaimed }: {
   }, [idleKey, limit, retire]);
 
   const running = spawning > 0 || agents.some((a) => a.status !== 'done');
-  return { agents, selectedId, select, remove, spawn, message, stop, stopAll, running, observe, endObserved };
+  return { agents, selectedId, select, remove, spawn, message, stop, stopAll, running, observe, endObserved, logMeta };
 }

@@ -10,6 +10,7 @@ import { useClaudeRun } from './hooks/useClaudeRun';
 import type { RunEnd } from './hooks/useClaudeRun';
 import { useMessageQueue } from './hooks/useMessageQueue';
 import { useAgents } from './hooks/useAgents';
+import { usePermissions } from './hooks/usePermissions';
 import { useGeneralChat } from './hooks/useGeneralChat';
 import { usePanel } from './hooks/usePanel';
 import { useWorkspaceActions } from './hooks/useWorkspaceActions';
@@ -73,12 +74,20 @@ function AppShell() {
   achRef.current = ach;
   // An inner event of a delegation that is not a shown agent goes back to the run as an ordinary event.
   const replayRef = useRef<(ev: ClaudeEvent) => void>(() => {});
+  // Permission cards ("Ask me each time"): the decision is logged as a meta line in the chat that asked.
+  const agentLogRef = useRef<(agentId: string, text: string) => void>(() => {});
+  const permissions = usePermissions((owner, text) => {
+    if (owner.kind === 'quest') persistMessage(owner.wsId, { kind: 'meta', text });
+    else agentLogRef.current(owner.agentId, text);
+  });
   const agents = useAgents({
+    permissions,
     game, say,
     notify: (id, text) => persistMessage(id, { kind: 'meta', text }),
     archive: archiveAgent,
     onUnclaimed: (ev) => replayRef.current(ev),
   });
+  agentLogRef.current = agents.logMeta;
   // Messages typed while Claude's run is busy wait here and go out one by one (see `drainQueue`).
   const queue = useMessageQueue();
   const projectModelRef = useRef(projectModel);
@@ -108,7 +117,7 @@ function AppShell() {
   };
   const run = useClaudeRun({
     game, say, setStatus, stageRef: refs.stageRef, busyRef,
-    observe: agents.observe, endObserved: agents.endObserved, onEnd: onRunEnd,
+    observe: agents.observe, endObserved: agents.endObserved, permissions, onEnd: onRunEnd,
   });
   replayRef.current = run.replay;
   const ask = useGeneralChat();
@@ -188,6 +197,14 @@ function AppShell() {
     const timer = setTimeout(() => { if (!busyRef.current) setStatus('Sleeping'); }, 3000);
     return () => clearTimeout(timer);
   }, [agents.running, agentCount, run.running, setStatus]);
+
+  // Something is waiting for the user's OK: the HUD says so and the strip glows, so a closed panel never hides it.
+  const waiting = permissions.requests.length;
+  useEffect(() => {
+    document.body.classList.toggle('perm-pending', waiting > 0);
+    return () => document.body.classList.remove('perm-pending');
+  }, [waiting]);
+  const askingAgents = new Set(permissions.requests.flatMap((r) => (r.owner.kind === 'agent' ? [r.owner.agentId] : [])));
 
   // Level prestige (weapon glow from 10, aura from 15) follows the hero's level.
   const level = ws ? levelFor(xpFor(ws)) : 0;
@@ -321,6 +338,7 @@ function AppShell() {
         project={{
           ws, run, agents, busy, projectBusy, workspaceActions,
           archive: { count: ws?.archive?.length ?? 0, open: panel.drawerOpen, toggle: () => { void panel.toggleDrawer(); } },
+          permissions,
           queue: ws ? {
             items: queue.items(ws.id),
             paused: queue.isPaused(ws.id),
@@ -348,8 +366,9 @@ function AppShell() {
           hasWorkspace: !!ws,
           onImport: workspaceActions.importProject,
           agents: agents.agents,
+          asking: askingAgents,
         }}
-        hudProps={{ ws, game, status, dragProps }}
+        hudProps={{ ws, game, status: waiting > 0 ? `Waiting for your OK (${waiting})` : status, dragProps }}
       />
     </>
   );
