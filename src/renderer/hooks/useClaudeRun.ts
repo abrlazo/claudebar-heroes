@@ -4,6 +4,7 @@ import { bar } from '../lib/bridge';
 import { useSettings } from '../context/SettingsContext';
 import { useBridgeEvent } from './useBridgeEvent';
 import type { GameApi } from './useGameEngine';
+import type { PermissionsApi } from './usePermissions';
 import { levelFor, totalTokens, xpFor } from '../lib/leveling';
 import { popXp } from '../lib/effects';
 import { formatTokens } from '../lib/format';
@@ -65,6 +66,8 @@ interface Deps {
   /** Claude's delegations to the project's agents (see `useAgents`). `observe` returns false for other agents. */
   observe: (ev: ClaudeEvent) => boolean;
   endObserved: (wsId: string, cancelled: boolean) => void;
+  /** The permission cards ("Ask me each time"): this run's requests are added to it and cleared when it ends. */
+  permissions: Pick<PermissionsApi, 'add' | 'resolve' | 'clearOwner'>;
   /**
    * Called when a run is over (also when a send was rejected before it started, with clean false).
    * It runs after this hook's own state is reset in the same batch, so a `send` made from it wins:
@@ -82,7 +85,7 @@ interface Deps {
  * order matches what was shown. `liveUsage` counts tokens as the run goes:
  * finished model calls plus the input already known for the call in flight.
  */
-export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe, endObserved, onEnd }: Deps): ClaudeRun {
+export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe, endObserved, permissions, onEnd }: Deps): ClaudeRun {
   const { getSettings, persistMessage, patchWorkspaceLocal } = useSettings();
   const [running, setRunning] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -198,6 +201,19 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
         }
         break;
 
+      case 'permission':
+        // Claude waits for the user: save what it said so far, then the card shows under the chat.
+        flush();
+        if (runWsId.current) permissions.add({ kind: 'quest', wsId: runWsId.current }, ev);
+        setStatus(`Waiting for your OK: ${ev.tool ?? 'a tool'}`);
+        say('Needs your OK!', 3000);
+        break;
+
+      case 'permission-resolved':
+        if (ev.requestId) permissions.resolve(ev.requestId, ev.how ?? 'ended');
+        setStatus('Working…');
+        break;
+
       case 'result':
         flush();
         if (ev.isError) {
@@ -236,6 +252,7 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
 
       case 'end':
         flush();
+        if (runWsId.current) permissions.clearOwner({ kind: 'quest', wsId: runWsId.current }); // the process is gone
         // A run that ended with an error or was stopped cancels the agents it had delegated to.
         if (runWsId.current) endObserved(runWsId.current, ev.code !== 0);
         {
