@@ -13,7 +13,10 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cbh-roster-'));
 fs.copyFileSync(path.join(root, 'src/renderer/engine/heroes.js'), path.join(tmp, 'heroes.mjs'));
 const { CHARACTERS, RIG, findSummon, generateHero } = await import(pathToFileURL(path.join(tmp, 'heroes.mjs')).href);
 fs.copyFileSync(path.join(root, 'src/renderer/engine/boss.js'), path.join(tmp, 'boss.mjs'));
-const { BOSS_CHANCE, bossChance, rollBoss, stageKey } = await import(pathToFileURL(path.join(tmp, 'boss.mjs')).href);
+const { BOSS_CHANCE, LEGENDARY_CHANCE, bossChance, legendaryChance, rollBossKind, stageKey } = await import(pathToFileURL(path.join(tmp, 'boss.mjs')).href);
+fs.copyFileSync(path.join(root, 'src/renderer/engine/enemies.js'), path.join(tmp, 'enemies.mjs'));
+const { BOSSES, LEGENDARY_BOSS } = await import(pathToFileURL(path.join(tmp, 'enemies.mjs')).href);
+const enemiesSrc = fs.readFileSync(path.join(root, 'src/renderer/engine/enemies.js'), 'utf8');
 fs.rmSync(tmp, { recursive: true, force: true });
 const design = createRequire(import.meta.url)(path.join(root, 'src/main/hero-design.js'));
 
@@ -82,18 +85,48 @@ check('the prompt carries the name as a JSON string', design.designPrompt('zor "
 check('parseDesignText finds JSON inside code fences', design.parseDesignText('text\n```json\n{"a":1}\n```')?.a === 1 && design.parseDesignText('no json') === null);
 
 // ----- rare bosses (engine/boss.js) -----
-check('boss: BOSS_CHANCE is 5%', BOSS_CHANCE === 0.05);
-check('boss: chance 0 never rolls a boss, chance 1 always does', Array.from({ length: 1000 }, () => rollBoss(0)).every((r) => r === false) && Array.from({ length: 1000 }, () => rollBoss(1)).every((r) => r === true));
-check('boss: the roll is "random < chance"', rollBoss(undefined, () => 0.049) === true && rollBoss(undefined, () => 0.05) === false);
-let hits = 0;
-for (let i = 0; i < 200000; i++) if (rollBoss()) hits++;
-check('boss: 200000 default rolls hit about 5%', hits / 200000 > 0.045 && hits / 200000 < 0.055, `${(hits / 2000).toFixed(2)}%`);
+check('boss: BOSS_CHANCE is 1% and LEGENDARY_CHANCE 0.3%', BOSS_CHANCE === 0.01 && LEGENDARY_CHANCE === 0.003);
+const stub = (v) => () => v;
+check('boss: the roll bands are legendary < 0.003 <= map < 0.013 <= none',
+  rollBossKind(stub(0.0029)) === 'legendary' && rollBossKind(stub(0.0031)) === 'map' && rollBossKind(stub(0.0129)) === 'map'
+  && rollBossKind(stub(0.0131)) === 'none' && rollBossKind(stub(0.9)) === 'none');
+let calls = 0;
+rollBossKind(() => { calls++; return 0.5; });
+check('boss: one rng() call per roll (the two outcomes share it)', calls === 1);
+check('boss: chances (0,0) never roll a boss, (1,0) always the map boss, (0,1) always the legendary',
+  Array.from({ length: 1000 }, () => rollBossKind(Math.random, 0, 0)).every((r) => r === 'none')
+  && Array.from({ length: 1000 }, () => rollBossKind(Math.random, 1, 0)).every((r) => r === 'map')
+  && Array.from({ length: 1000 }, () => rollBossKind(Math.random, 0, 1)).every((r) => r === 'legendary'));
+let mapHits = 0;
+let legendHits = 0;
+const N = 400000;
+for (let i = 0; i < N; i++) {
+  const k = rollBossKind();
+  if (k === 'map') mapHits++;
+  else if (k === 'legendary') legendHits++;
+}
+check('boss: 400000 default rolls give about 1% map bosses', mapHits / N > 0.009 && mapHits / N < 0.011, `${(mapHits / N * 100).toFixed(3)}%`);
+check('boss: 400000 default rolls give about 0.3% legendaries', legendHits / N > 0.0022 && legendHits / N < 0.0038, `${(legendHits / N * 100).toFixed(3)}%`);
 const badSeams = [2, -0.1, '1', NaN, Infinity, null, {}];
-check('boss: the test seam ignores anything that is not a number in [0,1]', badSeams.every((v) => { globalThis.__cbhBossChance = v; return bossChance() === BOSS_CHANCE; }));
+check('boss: the test seams ignore anything that is not a number in [0,1]', badSeams.every((v) => {
+  globalThis.__cbhBossChance = v; globalThis.__cbhLegendaryChance = v;
+  return bossChance() === BOSS_CHANCE && legendaryChance() === LEGENDARY_CHANCE;
+}));
+delete globalThis.__cbhLegendaryChance;
 globalThis.__cbhBossChance = 0.5;
-check('boss: the test seam accepts 0.5 and 0', bossChance() === 0.5 && (globalThis.__cbhBossChance = 0, bossChance() === 0));
+check('boss: the map seam accepts 0.5 and 0, and turns the legendary off when set alone',
+  bossChance() === 0.5 && legendaryChance() === 0 && (globalThis.__cbhBossChance = 0, bossChance() === 0));
+globalThis.__cbhLegendaryChance = 0.2;
+check('boss: the legendary seam wins over that rule', legendaryChance() === 0.2);
 delete globalThis.__cbhBossChance;
+delete globalThis.__cbhLegendaryChance;
 check('boss: the stage key changes with the map and every 8 kills', stageKey('forest', 7, 8) === 'forest:0' && stageKey('forest', 8, 8) === 'forest:1' && stageKey('desert', 7, 8) !== stageKey('forest', 7, 8));
+const mainSrcBoss = fs.readFileSync(path.join(root, 'src/main/main.js'), 'utf8');
+const bossRe = new RegExp(mainSrcBoss.match(/const isBossId = .*?\/(\^boss:[^/]*\$)\/\.test/)?.[1] ?? '$^');
+check('boss: isBossId in main.js accepts every map boss and the legendary, and rejects others',
+  Object.values(BOSSES).every((b) => bossRe.test(b.id)) && bossRe.test(LEGENDARY_BOSS.id) && !bossRe.test('boss:bogus') && !bossRe.test('boss:legendary2'));
+check('boss: the legendary is a dragon with more HP than a map boss, and enemies.js draws one',
+  LEGENDARY_BOSS.id === 'boss:legendary' && LEGENDARY_BOSS.kind === 'dragon' && LEGENDARY_BOSS.legendary === true && LEGENDARY_BOSS.hp > BOSSES.forest.hp && /\n  dragon\(p\) \{/.test(enemiesSrc));
 
 // ----- achievements (lib/achievements.ts, allowlist in main/main.js) -----
 const achSrc = fs.readFileSync(path.join(root, 'src/renderer/lib/achievements.ts'), 'utf8');
@@ -104,6 +137,8 @@ const mainIds = [...(mainSrc.match(/const ACHIEVEMENT_IDS = \[([\s\S]*?)\];/)?.[
 check('achievements: ids are unique and there are some', achIds.length > 0 && new Set(achIds).size === achIds.length, `${achIds.length} ids`);
 check('achievements: every tier has at least one', ['short', 'medium', 'long'].every((t) => achTiers.includes(t)) && achTiers.length === achIds.length);
 check('achievements: the allowlist in main.js matches the table', JSON.stringify([...mainIds].sort()) === JSON.stringify([...achIds].sort()), `main ${mainIds.length}, table ${achIds.length}`);
+
+check('achievements: "all map bosses" counts only the five map ids, not the legendary', /const mapBosses = .*forest\|desert\|snowy\|lava\|night\)/.test(achSrc) && /id: 'bosses-all'.*mapBosses\(s\)\.length >= 5/.test(achSrc));
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nAll roster checks passed');
 process.exit(failed ? 1 : 0);
