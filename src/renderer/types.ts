@@ -81,7 +81,7 @@ export interface Workspace {
   agents: AgentRecord[];
   /** Chats of retired / closed agents, newest last. Changed only through the archive handlers in main. */
   archive: ArchivedAgent[];
-  /** Map bosses defeated, by boss id ("boss:forest"). */
+  /** Map and legendary bosses defeated, by boss id ("boss:forest"). */
   trophies: Record<string, { count: number; firstAt: number }>;
   /** Earned achievements by id (main allowlists the ids). Never removed once earned. */
   achievements: Record<string, { at: number }>;
@@ -197,7 +197,7 @@ export interface Bar {
   /** Asks Claude (in main, no tools) to design the look of a summoned name; main validates and saves it. */
   designSummon(wsId: string, name: string): Promise<{ ok: true; cached?: boolean; settings: Settings } | { ok: false; reason: string }>;
   updateWorkspace(id: string, patch: Partial<Pick<Workspace, 'kills' | 'map'>>): Promise<Settings>;
-  /** A map boss was defeated: adds it to the workspace's trophies (main validates the boss id). */
+  /** A map or legendary boss was defeated: adds it to the workspace's trophies (main validates the boss id). */
   addTrophy(id: string, bossId: string): Promise<Settings>;
   /** An achievement was earned (main validates the id; a repeat is ignored). */
   addAchievement(id: string, achId: string): Promise<Settings>;
