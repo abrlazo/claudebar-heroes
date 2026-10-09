@@ -18,7 +18,7 @@ import { useWindowDrag } from './hooks/useWindowDrag';
 import { usePanelResize } from './hooks/usePanelResize';
 import { heroFor } from './lib/heroCache';
 import { findSummon } from './engine/heroes.js';
-import { BOSSES } from './engine/enemies.js';
+import { BOSSES, LEGENDARY_BOSS } from './engine/enemies.js';
 import { MAX_AGENTS, MAX_CHAIN_STEPS, parseAgentChain, parseAgentInvocation } from './lib/agents';
 import type { AgentInvocation } from './lib/agents';
 import { bar } from './lib/bridge';
@@ -64,8 +64,8 @@ function AppShell() {
       if (!id) return;
       const first = !getSettings().workspaces.find((w) => w.id === id)?.trophies?.[bossId];
       addTrophy(id, bossId);
-      const boss = Object.values(BOSSES).find((b) => b.id === bossId);
-      if (first && boss) say(`Trophy: ${boss.name}`, 1800);
+      const boss = [...Object.values(BOSSES), LEGENDARY_BOSS].find((b) => b.id === bossId);
+      if (first && boss) say(boss.legendary ? `Legendary trophy: ${boss.name}` : `Trophy: ${boss.name}`, boss.legendary ? 2400 : 1800);
     },
     say,
   });

@@ -106,11 +106,17 @@ function load() {
     usage: emptyUsage(), lastContext: 0, contextWindow: 200000, messages: [], agents: [], archive: [], trophies: {}, achievements: {}, heroDesign: null, ...w,
     // No agent process survives a restart and nothing reads these stale records, so start clean.
   })).map((w) => ({ ...w, agents: [], stats: cleanStats(w.stats), archive: cleanArchive(w.archive) }));
-  // One-time: bosses became rare, so every project starts with an empty trophy shelf.
+  // One-time resets of the trophy shelf: bosses became rare (V1), then rarer (1%) with a legendary one (V2).
+  // Kills, map and everything else stay.
   s.migrations = { ...(raw.migrations && typeof raw.migrations === 'object' && !Array.isArray(raw.migrations) ? raw.migrations : {}) };
   if (!s.migrations.trophyResetV1) {
     s.workspaces = s.workspaces.map((w) => ({ ...w, trophies: {} }));
     s.migrations.trophyResetV1 = true;
+    needsFlush = true;
+  }
+  if (!s.migrations.trophyResetV2) {
+    s.workspaces = s.workspaces.map((w) => ({ ...w, trophies: {} }));
+    s.migrations.trophyResetV2 = true;
     needsFlush = true;
   }
   return s;

@@ -709,11 +709,11 @@ try {
   await sleep(900);
   const openTabByLabel = (label) => ev(`[...document.querySelectorAll(".panel-tabs .tab")].find(t=>t.textContent===${JSON.stringify(label)})?.click()`);
 
-  // Trophy shelf from an old settings file: five locked slots, no errors. addTrophy validates the boss id.
+  // Trophy shelf from an old settings file: six locked slots, no errors. addTrophy validates the boss id.
   await openTabByLabel('Status');
   await sleep(400);
   const slots = await ev('JSON.stringify({all:document.querySelectorAll(".trophy").length,locked:document.querySelectorAll(".trophy.locked").length,painted:[...document.querySelectorAll(".trophy canvas")].every(c=>c.width>0)})');
-  check('trophies: an old settings file (no "trophies") shows five locked slots', slots === JSON.stringify({ all: 5, locked: 5, painted: true }), slots);
+  check('trophies: an old settings file (no "trophies") shows six locked slots', slots === JSON.stringify({ all: 6, locked: 6, painted: true }), slots);
   const evAsync = async (expr) => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result.result.value;
   await evAsync('window.bar.addTrophy("sim-boss", "boss:bogus")');
   await evAsync('window.bar.addTrophy("sim-boss", "__proto__")');
@@ -756,7 +756,7 @@ try {
     };
     new MutationObserver(scan).observe(stage, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'], characterData: true });
   })()`);
-  await ev('globalThis.__cbhBossChance = 1'); // bosses are rare (5%); this run needs one every stage
+  await ev('globalThis.__cbhBossChance = 1'); // bosses are rare (1%); this run needs one every stage
   await ev(`(()=>{
     const sim = window.__sim; sim.bossEls = new WeakSet(); sim.bossCount = 0;
     const stage = document.getElementById('stage');
@@ -795,7 +795,7 @@ try {
   await openTabByLabel('Status');
   await sleep(500);
   const shelf = await ev('JSON.stringify({open:[...document.querySelectorAll(".trophy:not(.locked)")].map(t=>t.querySelector(".trophy-count")?.textContent),locked:document.querySelectorAll(".trophy.locked").length})');
-  check('trophies: the shelf shows the defeated boss as "x1" and the other four locked', shelf === JSON.stringify({ open: ['x1'], locked: 4 }), shelf);
+  check('trophies: the shelf shows the defeated boss as "x1" and the other five locked', shelf === JSON.stringify({ open: ['x1'], locked: 5 }), shelf);
   await shot('7-trophies');
   await sleep(1500);
   const saved = JSON.parse(fs.readFileSync(path.join(userData2, 'settings.json'), 'utf8')).workspaces[0];
@@ -859,6 +859,82 @@ try {
   check('boss chance 0: no trophy, kills and map saved', Object.keys(savedNob.trophies).length === 0 && savedNob.kills >= 8 && savedNob.map === 'desert', JSON.stringify({ t: savedNob.trophies, kills: savedNob.kills, map: savedNob.map }));
   check('boss chance 0: no page errors', pageErrors.length === 0, pageErrors.join(' | '));
 
+  // ===== Phase 2d: the legendary dragon (forced with __cbhLegendaryChance = 1) =====
+  stopApp();
+  await sleep(1000);
+  port += 1;
+  const userData2d = path.join(work, 'userData2d');
+  fs.mkdirSync(userData2d);
+  fs.writeFileSync(path.join(userData2d, 'settings.json'), JSON.stringify({
+    permissionMode: 'default', windowPos: null, theme: process.env.SIM_THEME || 'light', panelHeight: 500, activeId: 'sim-dragon',
+    migrations: { trophyResetV1: true, trophyResetV2: true },
+    workspaces: [{
+      id: 'sim-dragon', path: project, name: 'dragonrun', heroSeed: 'summon:gandalf',
+      usage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }, lastContext: 0, contextWindow: 200000,
+      kills: 4, map: process.env.SIM_MAP || 'forest', sessionId: null, messages: [], agents: [],
+      // Four map bosses already: the legendary must not make it "all five" (Boss Hunter).
+      trophies: { 'boss:forest': { count: 1, firstAt: 1 }, 'boss:desert': { count: 1, firstAt: 1 }, 'boss:snowy': { count: 1, firstAt: 1 }, 'boss:lava': { count: 1, firstAt: 1 } },
+    }],
+  }));
+  app = launch(userData2d);
+  await connect();
+  await sleep(1500);
+  await click('#toggle-panel');
+  await sleep(900);
+  await ev('globalThis.__cbhLegendaryChance = 1');
+  await ev(`(()=>{
+    const sim = window.__dragon = { seen: null, peak: 0, normalAfter: 0, dying: false, flash: false, bubble: false, hp: false, w: new WeakSet() };
+    const stage = document.getElementById('stage');
+    const scan = () => {
+      const bosses = [...stage.querySelectorAll('.enemy.boss:not(.dying):not(.fleeing)')];
+      sim.peak = Math.max(sim.peak, bosses.length);
+      for (const e of stage.querySelectorAll('.enemy:not(.boss)')) if (!sim.w.has(e)) { sim.w.add(e); if (bosses.length) sim.normalAfter++; }
+      const b = bosses[0];
+      if (b && !sim.seen) {
+        const r = b.getBoundingClientRect(); const st = stage.getBoundingClientRect();
+        sim.seen = { cls: b.className, name: b.querySelector('.enemy-name')?.textContent, canvasW: b.querySelector('canvas').clientWidth,
+          canvasH: b.querySelector('canvas').clientHeight, topInside: r.top >= st.top - 0.5, bottomInside: r.bottom <= st.bottom + 0.5,
+          nameColor: getComputedStyle(b.querySelector('.enemy-name')).color, mapInfo: document.getElementById('map-info').textContent };
+      }
+      if (b && b.querySelector('.hp') && getComputedStyle(b.querySelector('.hp')).borderTopColor === 'rgb(0, 229, 255)' && b.querySelector('.hp').offsetWidth >= 80) sim.hp = true;
+      if (stage.querySelector('.enemy.boss.dying')) sim.dying = true;
+      if (stage.classList.contains('legend-flash')) sim.flash = true;
+      const bt = document.getElementById('bubble')?.textContent; if (bt && bt.startsWith('Legendary')) sim.bubble = bt;
+    };
+    new MutationObserver(scan).observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
+  })()`);
+  await sendText('LONGRUN go');
+  let dragon = null;
+  for (let i = 0; i < 400 && !dragon; i++) { await sleep(150); dragon = JSON.parse(await ev('JSON.stringify(window.__dragon.seen)')); }
+  check('legendary: the dragon appears with its own name tag and class', dragon?.name === 'Azurath, the Frost Dragon' && dragon?.cls === 'enemy boss legendary' && dragon?.nameColor === 'rgb(0, 229, 255)', JSON.stringify(dragon));
+  check('legendary: it is drawn bigger than a map boss (96x60 canvas, a map boss is 66x60)', dragon?.canvasW === 96 && dragon?.canvasH === 60, JSON.stringify(dragon));
+  check('legendary: it fits inside the stage vertically (bar, sprite and name tag not clipped)', !!dragon && dragon.topInside && dragon.bottomInside, JSON.stringify(dragon));
+  for (let i = 0; i < 40; i++) {
+    const near = await ev('(()=>{const b=document.querySelector(".enemy.boss:not(.dying)");const s=document.getElementById("stage").getBoundingClientRect();return !!b&&b.getBoundingClientRect().right<s.right-20})()');
+    if (near) break;
+    await sleep(150);
+  }
+  await sleep(1200);
+  await shot(`12-dragon-${process.env.SIM_MAP || 'forest'}-${process.env.SIM_THEME || 'light'}`);
+  for (let i = 0; i < 600 && !(await ev('window.__dragon.dying')); i++) await sleep(150);
+  check('legendary: the hero beats it', await ev('window.__dragon.dying'));
+  check('legendary: only the boss spawns (one at a time, no normal monster behind it), HP bar is the wide cyan one', (await ev('window.__dragon.peak')) === 1 && (await ev('window.__dragon.normalAfter')) === 0 && (await ev('window.__dragon.hp')), `peak ${await ev('window.__dragon.peak')}, normal after ${await ev('window.__dragon.normalAfter')}, hp ${await ev('window.__dragon.hp')}`);
+  await sleep(1500);
+  check('legendary: a screen flash and a "Legendary ..." bubble (the first trophy message follows "Legendary boss down!") are shown on its defeat', (await ev('window.__dragon.flash')) && /^Legendary (boss down!|trophy: Azurath, the Frost Dragon)$/.test(await ev('window.__dragon.bubble')), `${await ev('window.__dragon.flash')} / ${await ev('window.__dragon.bubble')}`);
+  await sleep(2500);
+  check('legendary: the stage clears into the next map', /^(Desert|Snowy|Lava|Night|Forest) 0\/8/.test(await ev('document.getElementById("map-info").textContent')), await ev('document.getElementById("map-info").textContent'));
+  await click('#tab-project-chat .stop');
+  await sleep(1000);
+  await ev('[...document.querySelectorAll(".panel-tabs .tab")].find(t=>t.textContent==="Status")?.click()');
+  await sleep(500);
+  const shelfL = await ev('JSON.stringify({legend:[...document.querySelectorAll(".trophy.legendary:not(.locked)")].map(t=>t.querySelector(".trophy-count")?.textContent),open:document.querySelectorAll(".trophy:not(.locked)").length,locked:document.querySelectorAll(".trophy.locked").length})');
+  check('legendary: the sixth slot fills ("x1") next to the four map trophies', shelfL === JSON.stringify({ legend: ['x1'], open: 5, locked: 1 }), shelfL);
+  await shot('13-trophies-legendary');
+  await sleep(1500);
+  const savedL = JSON.parse(fs.readFileSync(path.join(userData2d, 'settings.json'), 'utf8')).workspaces[0];
+  check('legendary: boss:legendary saved once with the kills; Boss Hunter is not unlocked by it', savedL.trophies['boss:legendary']?.count === 1 && savedL.kills >= 8 && !savedL.achievements?.['bosses-all'], JSON.stringify({ t: Object.keys(savedL.trophies), kills: savedL.kills, a: Object.keys(savedL.achievements || {}) }));
+  check('legendary: no page errors', pageErrors.length === 0, pageErrors.join(' | '));
+
   // ===== Phase 2c: one-time trophy reset (migration) that survives a restart =====
   stopApp();
   await sleep(1000);
@@ -872,29 +948,30 @@ try {
       id: 'sim-mig', path: project, name: 'migrun', heroSeed: 'simulation-seed',
       usage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }, lastContext: 0, contextWindow: 200000,
       kills: 21, map: 'desert', sessionId: null, messages: [], agents: [],
-      trophies: { 'boss:forest': { count: 3, firstAt: 1 }, 'boss:lava': { count: 1, firstAt: 2 } },
+      trophies: { 'boss:forest': { count: 3, firstAt: 1 }, 'boss:lava': { count: 1, firstAt: 2 }, 'boss:legendary': { count: 1, firstAt: 3 } },
     }],
+    migrations: { trophyResetV1: true },   // an install that already had the first reset, but not the second
   }));
   app = launch(userData2c);
   await connect();
   await sleep(1500);
   const evA = async (expr) => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result.result.value;
   const mig1 = JSON.parse(await evA('window.bar.getSettings().then(s=>JSON.stringify(s))'));
-  check('migration: trophies are reset, kills, map and the marker are kept', JSON.stringify(mig1.workspaces[0].trophies) === '{}' && mig1.workspaces[0].kills === 21 && mig1.workspaces[0].map === 'desert' && mig1.migrations?.trophyResetV1 === true, JSON.stringify({ t: mig1.workspaces[0].trophies, k: mig1.workspaces[0].kills, m: mig1.migrations }));
+  check('migration: trophies are reset, kills, map and the marker are kept', JSON.stringify(mig1.workspaces[0].trophies) === '{}' && mig1.workspaces[0].kills === 21 && mig1.workspaces[0].map === 'desert' && mig1.migrations?.trophyResetV1 === true && mig1.migrations?.trophyResetV2 === true, JSON.stringify({ t: mig1.workspaces[0].trophies, k: mig1.workspaces[0].kills, m: mig1.migrations }));
   const onDisk = readSaved();
-  check('migration: the marker is on disk at once (before any other change)', onDisk.migrations?.trophyResetV1 === true && JSON.stringify(onDisk.workspaces[0].trophies) === '{}' && onDisk.workspaces[0].kills === 21);
+  check('migration: the marker is on disk at once (before any other change)', onDisk.migrations?.trophyResetV1 === true && onDisk.migrations?.trophyResetV2 === true && JSON.stringify(onDisk.workspaces[0].trophies) === '{}' && onDisk.workspaces[0].kills === 21);
   await click('#toggle-panel');
   await sleep(900);
   await ev('[...document.querySelectorAll(".panel-tabs .tab")].find(t=>t.textContent==="Status")?.click()');
   await sleep(500);
   const shelf2 = await ev('JSON.stringify({locked:document.querySelectorAll(".trophy.locked").length,all:document.querySelectorAll(".trophy").length,hint:document.querySelector(".trophy-hint")?.textContent})');
-  check('migration: the shelf shows five locked slots and the rarity hint', shelf2 === JSON.stringify({ locked: 5, all: 5, hint: 'Bosses appear rarely (about 1 in 20 stages).' }), shelf2);
+  check('migration: the shelf shows six locked slots and the rarity hint', shelf2 === JSON.stringify({ locked: 6, all: 6, hint: 'Bosses appear rarely (about 1 in 100 stages), a legendary one even more rarely.' }), shelf2);
   await shot('11-trophies-reset');
   await evA('window.bar.addTrophy("sim-mig", "boss:snowy")');
   await evA('window.bar.updateSettings({ migrations: {} })');
   await evA('window.bar.setSettings({ migrations: {} })');
   const mig2 = JSON.parse(await evA('window.bar.getSettings().then(s=>JSON.stringify(s))'));
-  check('migration: the renderer cannot clear the marker (settings:update and settings:set)', mig2.migrations?.trophyResetV1 === true && mig2.workspaces[0].trophies['boss:snowy']?.count === 1, JSON.stringify(mig2.migrations));
+  check('migration: the renderer cannot clear the marker (settings:update and settings:set)', mig2.migrations?.trophyResetV1 === true && mig2.migrations?.trophyResetV2 === true && mig2.workspaces[0].trophies['boss:snowy']?.count === 1, JSON.stringify(mig2.migrations));
   await sleep(1500);
   stopApp();
   await sleep(1000);
@@ -903,7 +980,7 @@ try {
   await connect();
   await sleep(1500);
   const mig3 = JSON.parse(await evA('window.bar.getSettings().then(s=>JSON.stringify(s))'));
-  check('migration: a trophy earned afterwards survives a restart, the reset does not run again', mig3.workspaces[0].trophies['boss:snowy']?.count === 1 && mig3.migrations?.trophyResetV1 === true && mig3.workspaces[0].kills === 21, JSON.stringify({ t: mig3.workspaces[0].trophies, m: mig3.migrations }));
+  check('migration: a trophy earned afterwards survives a restart, the reset does not run again', mig3.workspaces[0].trophies['boss:snowy']?.count === 1 && mig3.migrations?.trophyResetV1 === true && mig3.migrations?.trophyResetV2 === true && mig3.workspaces[0].kills === 21, JSON.stringify({ t: mig3.workspaces[0].trophies, m: mig3.migrations }));
   check('migration: no page errors', pageErrors.length === 0, pageErrors.join(' | '));
 
   // ===== Phase 3: "summon <name>": hand-built characters, and a look designed by Claude for any other name =====

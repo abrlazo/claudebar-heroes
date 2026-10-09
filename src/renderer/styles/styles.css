@@ -187,6 +187,16 @@ button:hover { border-color: var(--purple); }
 .enemy.boss .enemy-name { color: #ffd166; font-weight: bold; max-width: 110px; }
 .enemy.boss.dying { animation-duration: 0.8s; }
 .enemy.dying { animation: poof 0.4s forwards; }
+/* Legendary boss (the frost dragon): 64x40 canvas shown at 96x60 (1.5x, still crisp), cyan glow and tag. */
+.enemy.boss.legendary canvas { width: 96px; height: 60px; filter: drop-shadow(0 0 3px #00e5ff) drop-shadow(0 0 7px #2f7bff); }
+.enemy.boss.legendary.hit canvas { filter: brightness(2) drop-shadow(0 0 3px #00e5ff); }
+.enemy.boss.legendary .hp { width: 80px; height: 7px; border-color: #00e5ff; }
+.enemy.boss.legendary .hp-fill { background: linear-gradient(90deg, #00e5ff, #2f7bff); }
+.enemy.boss.legendary .enemy-name { color: #00e5ff; max-width: 200px; font-weight: bold; }
+.enemy.boss.legendary.dying { animation-duration: 1.2s; }
+#stage.legend-flash::after { content: ''; position: absolute; inset: 0; background: #bff3ff; pointer-events: none; z-index: 4; animation: legend-flash 0.7s ease-out forwards; }
+@keyframes legend-flash { from { opacity: 0.8; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { #stage.legend-flash::after { animation: none; opacity: 0; } }
 .enemy.fleeing { opacity: 0; }
 @keyframes poof { to { opacity: 0; scale: 1.6; filter: brightness(3); } }
 
@@ -782,6 +792,9 @@ body.theme-light .command-item.active .command-hint, body.theme-light .command-i
   background: var(--ink-2);
 }
 .trophy canvas { width: 66px; height: 60px; image-rendering: pixelated; }
+.trophy.legendary canvas { width: 64px; height: 40px; margin: 10px 0; }
+.trophy.legendary:not(.locked) { border-color: #00e5ff; }
+body.theme-light .trophy.legendary:not(.locked) { border-color: #0086b3; }
 .trophy-name { text-align: center; line-height: 1.2; }
 .trophy-count { color: #ffd166; font-weight: bold; }
 body.theme-light .trophy-count { color: #a06a00; }

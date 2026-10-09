@@ -28,6 +28,8 @@ const combo = (n: number) => (s: AchievementSnapshot) => s.stats.bestCombo >= n;
 const crits = (n: number) => (s: AchievementSnapshot) => s.stats.crits >= n;
 const agents = (n: number) => (s: AchievementSnapshot) => s.stats.agents >= n;
 const bosses = (s: AchievementSnapshot) => Object.keys(s.trophies || {});
+// "All 5 map bosses" counts the map ids only: the legendary trophy ("boss:legendary") must not stand in for one.
+const mapBosses = (s: AchievementSnapshot) => bosses(s).filter((id) => /^boss:(forest|desert|snowy|lava|night)$/.test(id));
 
 // Thresholds are guesses: tune them here. Each id is also allowlisted in main/main.js (npm run check compares them).
 export const ACHIEVEMENTS: Achievement[] = [
@@ -54,7 +56,7 @@ export const ACHIEVEMENTS: Achievement[] = [
   { id: 'kills-10000', name: 'Mythic', desc: 'Defeat 10,000 monsters', tier: 'long', test: kills(10000) },
   { id: 'level-25', name: 'Stormbringer', desc: 'Reach level 25 (lightning)', tier: 'long', test: level(25) },
   { id: 'level-45', name: 'Ascended', desc: 'Reach level 45', tier: 'long', test: level(45) },
-  { id: 'bosses-all', name: 'Boss Hunter', desc: 'Fell all 5 map bosses', tier: 'long', test: (s) => bosses(s).length >= 5 },
+  { id: 'bosses-all', name: 'Boss Hunter', desc: 'Fell all 5 map bosses', tier: 'long', test: (s) => mapBosses(s).length >= 5 },
   { id: 'boss-x10', name: 'Grudge Match', desc: 'Beat the same boss 10 times', tier: 'long', test: (s) => Object.values(s.trophies || {}).some((t) => t.count >= 10) },
   { id: 'agents-100', name: 'Army of Spirits', desc: 'Start 100 agents', tier: 'long', test: agents(100) },
   { id: 'tokens-10m', name: 'Context Hoarder', desc: 'Use 10 million tokens', tier: 'long', test: (s) => s.tokens >= 10_000_000 },
