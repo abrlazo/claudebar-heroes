@@ -18,8 +18,8 @@ npm start        # vite build, then launch Electron
 npm run dev      # same as start, but opens DevTools
 npm run watch    # rebuild the React UI on save (then Status -> Restart App)
 npm run typecheck # tsc --noEmit over src/renderer
-npm run check     # roster, hero-design validator, aura-width, archive/idle and archive-drawer layout checks (tools/check-roster.mjs, tools/check-aura.mjs, tools/check-archive.mjs, tools/check-drawer.mjs for the drawer's window layout)
-npm run simulate  # build, then run simulated /<agent> invocations, delegation, a boss fight (fake claude `LONGRUN` prompt), idle retirement and the archive (short idle time through `__cbhIdleMs`) and check the UI (tools/simulate-agents.mjs)
+npm run check     # roster, hero-design validator, aura-width, archive/idle and archive-drawer layout and message-queue checks (tools/check-roster.mjs, tools/check-aura.mjs, tools/check-archive.mjs, tools/check-drawer.mjs for the drawer's window layout, tools/check-queue.mjs)
+npm run simulate  # build, then run simulated /<agent> invocations, delegation, a boss fight (fake claude `LONGRUN` prompt), idle retirement and the archive (short idle time through `__cbhIdleMs`), the message queue and check the UI (tools/simulate-agents.mjs)
 ```
 
 The renderer is a React app bundled by Vite into `dist/renderer` (git-ignored); `main.js` loads that folder. Edit `src/renderer`, never `dist`.
@@ -76,6 +76,7 @@ React 19 + TypeScript + Vite (`strict`; run `npm run typecheck`). `engine/` stay
 - **`components/`** - presentational React components (`strip/`, `panel/`, `panel/inventory/`, `common/`). Element ids/classes are kept stable because `styles/styles.css` targets them.
 - **`hooks/`** - behaviour and IPC:
   - `useClaudeRun` - project chat run: Claude events -> saved messages (incl. thinking), live token usage, XP, hero reactions
+  - `useMessageQueue` - messages typed while Claude's run is busy (see *Queued messages*)
   - `useAgents` - agents: start (`/<agent> <task>`), per-agent logs, orbs, follow-up messages
   - `useCommandCatalog` - the commands the "/" popup offers (reloaded each time the popup opens)
   - `useGeneralChat` - the Ask chat (in-memory, project-less)
@@ -83,7 +84,7 @@ React 19 + TypeScript + Vite (`strict`; run `npm run typecheck`). `engine/` stay
   - `usePanel`, `usePanelResize`, `useWindowDrag`, `useClickThrough`, `useStageStatus`, `useWorkspaceActions`, `useBridgeEvent`
 - **`context/SettingsContext.tsx`** - renderer copy of settings.json; updates apply locally first, then persist via IPC
 - **`engine/`** - framework-free game: `game.js` (state machine/loop), `scene.js`, `sprite.js`, `aura.js`, `prestige.js`, `heroes.js`, `enemies.js`, `minionSprite.js`. No React or IPC imports.
-- **`lib/`** - pure helpers: `leveling`, `format`, `agents` (`/<agent>` parsing, limits, tab names), `commands` (popup entries, filtering), `models`, `heroCache`, `effects`, `bridge` (`window.bar`)
+- **`lib/`** - pure helpers: `leveling`, `format`, `agents` (`/<agent>` parsing, limits, tab names), `commands` (popup entries, filtering), `queue` (queued-message rules, checked by `tools/check-queue.mjs`), `models`, `heroCache`, `effects`, `bridge` (`window.bar`)
 
 ## Key Concepts
 
@@ -117,6 +118,8 @@ The only way for the user to start an agent is `/<agent-name> <task>` at the sta
 **The "/" suggestion popup** (Expedition composer only): typing `/` at the start of the text opens a list above the box (`components/common/CommandPopup.tsx`, driven by `Composer`). It lists agents, Claude's own commands (built-ins, skills, custom commands; `main/command-catalog.js`) plus the app's own `summon` and `/plan`. `/plan` is not a headless Claude command: `App.tsx` (`PLAN_COMMAND`) turns it into the *Plan only* permission mode and sends the rest as the task. `/help` and similar terminal-only commands do not run headless and are not listed. Typing narrows it (names that start with the text first, then ones that contain it); Up/Down moves, Enter or Tab picks (inserts `/name ` and does not send), Esc closes only the popup. Picking a skill or custom command just fills the box: sent as an ordinary message, Claude runs it. Picking an agent and adding a task starts it (see above). Add new kinds of command in `command-catalog.js` and `lib/commands.ts`.
 
 **Delegated agents** (observed): when Claude itself calls its Agent tool for a type that matches a definition in `.claude/agents/` (project or `~/.claude`, same gate as `/<agent>`, case-insensitive; `bar.agentDefinitions`), `useClaudeRun` hands the `subagent` events to `useAgents.observe`, which creates an *observed* agent (`observed: true`) in the workspace that started the run: tab, orb, first message = the delegated prompt, inner tool calls in its log and as monsters, the result when it ends, and a meta line in the Expedition chat. Built-in types (`Explore`, `Plan`, `general-purpose`...) and unknown names are not agents: their inner calls come back to the run as ordinary tool lines (`onUnclaimed` -> `useClaudeRun.replay`). Observed agents have no process: the composer is disabled in their tab, Stop ends the whole Expedition run (they finish as cancelled), they do not use `MAX_AGENTS` start slots, and they count for the HUD and the hero's wake/sleep. They are kept in memory only (not saved, gone after a restart).
+
+**Queued messages** (Expedition tab only): while Claude's own run for the project is busy the textarea stays enabled (placeholder "Claude is busy: Enter queues your message", Stop stays) and an ordinary message, skills and other slash commands included, goes to a per-workspace FIFO queue (`lib/queue.ts`, max `MAX_QUEUED` = 5, a 6th is refused with a meta line; `hooks/useMessageQueue.ts`, in memory only, **lost on quit or reload**). It shows in a queue bar under the chat (`.queue-bar`, a "queued" badge and an x per item). `summon`, `/<agent>` and chains, and a bare `/plan` stay immediate; `/plan <task>` while busy is still refused (not queued). A queued message is saved as a user message only when it is really sent, with the model picked at that moment and the permission mode main reads when it spawns. `useClaudeRun` reports `onEnd({ wsId, clean, stopped })`: a clean end (exit 0, no error, not stopped) makes `App.tsx` `drainQueue` send the next item from inside the end event, so the hero never sleeps between runs (`starting` covers the gap before `start`; `busyNow()` is the synchronous check that stops double sends). Stop, an error or a rejected send pause the queue instead (items kept, meta line, bar offers Resume and Clear; a message typed while paused and idle is sent at once). Drain only sends items of the ACTIVE workspace, because `claude:send` uses `settings.active()` in main; other workspaces keep their queue. Agent tabs are unchanged (no queue; observed agents keep a disabled composer). The simulation uses fake prompts `BRIEFRUN` (12 s, clean) and `SLOWFAIL` (fails after 4 s)
 
 **Agent lifecycle**:
 - Status: idle → running → done
@@ -247,7 +250,7 @@ EOF
 | `main/preload.js` | Secure IPC bridge (`window.bar`), subscriptions return unsubscribe |
 | `renderer/App.tsx` | Composition root: wires hooks to components |
 | `renderer/context/SettingsContext.tsx` | Renderer copy of settings; local-first updates + persistence |
-| `renderer/hooks/*` | IPC events, run/agent/chat state, window drag/resize, panel |
+| `renderer/hooks/*` | IPC events, run/agent/chat state, message queue (`useMessageQueue`), window drag/resize, panel |
 | `renderer/components/*` | Presentational React UI (strip, panel, inventory, common) |
 | `renderer/engine/game.js` | Hero state machine, enemy spawn/death, stage progression |
 | `renderer/engine/sprite.js` | Hero drawing and animation (expensive canvas ops) |
@@ -255,7 +258,7 @@ EOF
 | `renderer/engine/heroes.js` | Deterministic hero generation from seed, map list |
 | `renderer/engine/enemies.js` | Monster catalogue per map (goblin, skeleton, orc, imp) and the shared animated sprite rig (walk / fight / idle) |
 | `renderer/types.ts` | Shared TypeScript types, incl. the `window.bar` bridge contract |
-| `renderer/lib/*` | Pure helpers: leveling, format, agent rules, models, hero cache |
+| `renderer/lib/*` | Pure helpers: leveling, format, agent rules, queue rules (`queue.ts`), models, hero cache |
 | `renderer/styles/styles.css` | Theming (light/dark), component styling, animations |
 | `vite.config.mjs` | Bundles the renderer into `dist/renderer` |
 | `tsconfig.json` | Strict type checking for `src/renderer` (no emit; Vite builds) |

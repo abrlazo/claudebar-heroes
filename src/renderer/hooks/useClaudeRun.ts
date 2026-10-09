@@ -31,8 +31,19 @@ export function usageLine(u: Usage): string {
   return `in ${formatTokens(u.input + u.cacheCreate)} · out ${formatTokens(u.output)} · cached ${formatTokens(u.cacheRead)}`;
 }
 
+/** How a run ended. `clean` = exit code 0, no error event, not stopped by the user. */
+export interface RunEnd {
+  wsId: string | null;
+  clean: boolean;
+  stopped: boolean;
+}
+
 export interface ClaudeRun {
   running: boolean;
+  /** true from `send` until the run's first event (start / error / end): bridges the gap before `running`. */
+  starting: boolean;
+  /** Synchronous busy check (running or about to run) for code that outlives a render. */
+  busyNow: () => boolean;
   /** Workspace the current run belongs to (null when idle). */
   runWsId: string | null;
   streaming: Streaming;
@@ -54,6 +65,12 @@ interface Deps {
   /** Claude's delegations to the project's agents (see `useAgents`). `observe` returns false for other agents. */
   observe: (ev: ClaudeEvent) => boolean;
   endObserved: (wsId: string, cancelled: boolean) => void;
+  /**
+   * Called when a run is over (also when a send was rejected before it started, with clean false).
+   * It runs after this hook's own state is reset in the same batch, so a `send` made from it wins:
+   * the UI never shows an idle render between two back-to-back runs.
+   */
+  onEnd?: (info: RunEnd) => void;
 }
 
 /**
@@ -65,9 +82,18 @@ interface Deps {
  * order matches what was shown. `liveUsage` counts tokens as the run goes:
  * finished model calls plus the input already known for the call in flight.
  */
-export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe, endObserved }: Deps): ClaudeRun {
+export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe, endObserved, onEnd }: Deps): ClaudeRun {
   const { getSettings, persistMessage, patchWorkspaceLocal } = useSettings();
   const [running, setRunning] = useState(false);
+  const [starting, setStarting] = useState(false);
+  // Synchronous mirrors of running / starting, plus how the current run is going.
+  const pendingRef = useRef(false);
+  const runningRef = useRef(false);
+  const lastWsId = useRef<string | null>(null);
+  const sawError = useRef(false);
+  const stopped = useRef(false);
+  const onEndRef = useRef(onEnd);
+  onEndRef.current = onEnd;
   const [activeRunWsId, setActiveRunWsId] = useState<string | null>(null);
   const [streaming, setStreaming] = useState<Streaming>(EMPTY_STREAM);
   const [liveUsage, setLiveUsage] = useState<Usage | null>(null);
@@ -107,6 +133,10 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
   const handle = (ev: ClaudeEvent) => {
     switch (ev.type) {
       case 'start':
+        pendingRef.current = false;
+        runningRef.current = true;
+        setStarting(false);
+        sawError.current = false;
         runWsId.current = ev.wsId || getSettings().activeId;
         setActiveRunWsId(runWsId.current);
         text.current = '';
@@ -171,6 +201,7 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
       case 'result':
         flush();
         if (ev.isError) {
+          sawError.current = true;
           game.hurt();
           say('Ouch!', 2500);
           setStatus('Something went wrong');
@@ -188,11 +219,18 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
         break;
 
       case 'error': {
+        sawError.current = true;
         flush();
         const target = ev.wsId || runWsId.current || getSettings().activeId;
         if (target) persistMessage(target, { kind: 'error', text: ev.message ?? 'Unknown error' });
         game.hurt();
         setStatus('Error');
+        // Main rejected the send (no folder, ...): no run started and no `end` will come.
+        if (pendingRef.current && !runningRef.current) {
+          pendingRef.current = false;
+          setStarting(false);
+          onEndRef.current?.({ wsId: lastWsId.current, clean: false, stopped: false });
+        }
         break;
       }
 
@@ -200,11 +238,23 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
         flush();
         // A run that ended with an error or was stopped cancels the agents it had delegated to.
         if (runWsId.current) endObserved(runWsId.current, ev.code !== 0);
-        runWsId.current = null;
-        setActiveRunWsId(null);
-        setLiveUsage(null);
-        setRunning(false);
-        setTimeout(() => { if (!busyRef.current) setStatus('Sleeping'); }, 3000);
+        {
+          const wsId = runWsId.current ?? lastWsId.current;
+          const info: RunEnd = {
+            wsId,
+            stopped: stopped.current,
+            clean: ev.code === 0 && !sawError.current && !stopped.current,
+          };
+          runWsId.current = null;
+          pendingRef.current = false;
+          runningRef.current = false;
+          setStarting(false);
+          setActiveRunWsId(null);
+          setLiveUsage(null);
+          setRunning(false);
+          setTimeout(() => { if (!busyRef.current) setStatus('Sleeping'); }, 3000);
+          onEndRef.current?.(info);
+        }
         break;
 
       default:
@@ -223,9 +273,20 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
 
   /** Save the user's prompt and start a run in the active workspace. */
   const send = useCallback((wsId: string, prompt: string, model: ModelAlias) => {
+    stopped.current = false;
+    sawError.current = false;
+    pendingRef.current = true;
+    lastWsId.current = wsId;
+    setStarting(true);
     persistMessage(wsId, { kind: 'user', text: prompt });
     bar.send(prompt, model);
   }, [persistMessage]);
 
-  return { running, runWsId: activeRunWsId, streaming, liveUsage, send, stop: () => bar.cancel(), replay };
+  const stop = useCallback(() => {
+    stopped.current = true; // a deliberate Stop never counts as a clean end
+    bar.cancel();
+  }, []);
+  const busyNow = useCallback(() => pendingRef.current || runningRef.current, []);
+
+  return { running, starting, busyNow, runWsId: activeRunWsId, streaming, liveUsage, send, stop, replay };
 }

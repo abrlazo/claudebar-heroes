@@ -52,11 +52,29 @@ if [[ "$prompt" == /context* ]]; then
   exit 0
 fi
 flat=$(printf '%s' "$prompt" | tr '\\n' ' ' | cut -c1-300)
+# Every started run is logged as "<cwd>|<prompt>", so the queue checks can see what was sent, where and in what order.
+if [ -n "$FAKE_RUNS" ]; then echo "$PWD|$flat" >> "$FAKE_RUNS"; fi
 if [[ "$prompt" == *FAILNOW* ]]; then
   printf '%s\\n' "{\\"type\\":\\"system\\",\\"subtype\\":\\"init\\",\\"session_id\\":\\"$sid\\",\\"model\\":\\"fake\\"}"
   sleep 1
   printf '%s\\n' "{\\"type\\":\\"result\\",\\"is_error\\":true,\\"session_id\\":\\"$sid\\",\\"total_cost_usd\\":0,\\"num_turns\\":1,\\"duration_ms\\":1000}"
   exit 1
+fi
+# A run that fails after 4 s (a window to queue a message), and a short clean one (12 s, Stop works).
+if [[ "$prompt" == *SLOWFAIL* ]]; then
+  printf '%s\\n' "{\\"type\\":\\"system\\",\\"subtype\\":\\"init\\",\\"session_id\\":\\"$sid\\",\\"model\\":\\"fake\\"}"
+  sleep 4
+  printf '%s\\n' "{\\"type\\":\\"result\\",\\"is_error\\":true,\\"session_id\\":\\"$sid\\",\\"total_cost_usd\\":0,\\"num_turns\\":1,\\"duration_ms\\":4000}"
+  exit 1
+fi
+if [[ "$prompt" == *BRIEFRUN* ]]; then
+  printf '%s\\n' "{\\"type\\":\\"system\\",\\"subtype\\":\\"init\\",\\"session_id\\":\\"$sid\\",\\"model\\":\\"fake\\"}"
+  trap 'exit 130' INT
+  sleep 12 & wait $!
+  printf '%s\\n' "{\\"type\\":\\"assistant\\",\\"message\\":{\\"content\\":[{\\"type\\":\\"tool_use\\",\\"name\\":\\"Read\\",\\"input\\":{\\"file_path\\":\\"/repo/brief.ts\\"}}]}}"
+  printf '%s\\n' "{\\"type\\":\\"stream_event\\",\\"event\\":{\\"type\\":\\"content_block_delta\\",\\"delta\\":{\\"type\\":\\"text_delta\\",\\"text\\":\\"brief done task=$flat\\"}}}"
+  printf '%s\\n' "{\\"type\\":\\"result\\",\\"is_error\\":false,\\"session_id\\":\\"$sid\\",\\"total_cost_usd\\":0,\\"num_turns\\":1,\\"duration_ms\\":12000}"
+  exit 0
 fi
 # Claude delegating to a subagent through its Agent tool: plays back a recorded-shape transcript, one line a second.
 if [[ "$prompt" == *DELEGATE* ]]; then
@@ -144,10 +162,16 @@ fs.writeFileSync(path.join(project, '.claude', 'commands', 'git', 'sync.md'), '-
 // ----- isolated settings: one project, no real data touched -----
 const userData = path.join(work, 'userData');
 fs.mkdirSync(userData);
+fs.mkdirSync(path.join(work, 'project2'));
 fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
   permissionMode: 'default', windowPos: null, theme: 'dark', panelHeight: 500, activeId: 'sim-ws',
   workspaces: [{
     id: 'sim-ws', path: project, name: 'simulation', heroSeed: 'simulation-seed',
+    usage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }, lastContext: 0, contextWindow: 200000,
+    kills: 0, map: 'forest', sessionId: null, messages: [], agents: [],
+  }, {
+    // A second project, only used to check that queued messages never leave their own workspace.
+    id: 'sim-ws2', path: path.join(work, 'project2'), name: 'other', heroSeed: 'other-seed',
     usage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }, lastContext: 0, contextWindow: 200000,
     kills: 0, map: 'forest', sessionId: null, messages: [], agents: [],
   }],
@@ -167,7 +191,7 @@ const loseConnection = (why) => {
 const stopping = new WeakSet(); // children and sockets we ended on purpose
 const launch = (dir, env = {}) => {
   const child = spawn(electronBin, [root, `--user-data-dir=${dir}`, `--remote-debugging-port=${port}`], {
-    env: { ...process.env, CLAUDE_BIN: fake, FAKE_COUNT: path.join(work, 'design-count.txt'), ...env }, stdio: 'ignore',
+    env: { ...process.env, CLAUDE_BIN: fake, FAKE_COUNT: path.join(work, 'design-count.txt'), FAKE_RUNS: path.join(work, 'runs.txt'), ...env }, stdio: 'ignore',
   });
   child.on('exit', (code, signal) => { if (!stopping.has(child)) loseConnection(`the app exited by itself (code ${code}, signal ${signal})`); });
   child.on('error', (e) => loseConnection(`the app could not start: ${e.message}`));
@@ -507,6 +531,160 @@ try {
   const toolLinesAfter = await ev('document.querySelectorAll("#tab-project-chat .msg.tool").length');
   const toolTexts = await ev('[...document.querySelectorAll("#tab-project-chat .msg.tool")].map(m=>m.textContent).join("|")');
   check('delegation: ...it stays a tool line plus its inner calls, as before', toolLinesAfter - toolLinesBefore === 3 && /Grep/.test(toolTexts), `${toolLinesAfter - toolLinesBefore} new tool lines`);
+
+  // ===== Queued messages: typing while Claude's run is busy =====
+  await click('.agent-tab:first-child');
+  await sleep(300);
+  const RUNS = path.join(work, 'runs.txt');
+  const runLines = () => (fs.existsSync(RUNS) ? fs.readFileSync(RUNS, 'utf8').split('\n').filter(Boolean) : []);
+  const runsWith = (t) => runLines().filter((l) => l.includes(t)).length;
+  const qItems = async () => JSON.parse(await ev('JSON.stringify([...document.querySelectorAll("#tab-project-chat .queue-item .queue-text")].map(e=>e.textContent))'));
+  const qHead = () => ev('document.querySelector("#tab-project-chat .queue-head")?.textContent||""');
+  const stopShown = () => ev('!!document.querySelector("#tab-project-chat .stop")');
+  const userBubbles = () => ev('[...document.querySelectorAll("#tab-project-chat .msg.user")].map(m=>m.textContent).join("|")');
+  const lastMeta = () => ev('[...document.querySelectorAll("#tab-project-chat .msg.meta")].slice(-1)[0]?.textContent||""');
+  const waitUntil = async (fn, ms = 30000) => { for (let t = Date.now(); Date.now() - t < ms;) { if (await fn()) return true; await sleep(150); } return false; };
+  const enter = async (t) => { await type(ta, t); await sleep(120); await key(ta, 'Enter'); await sleep(200); };
+  const clickText = (sel, t) => ev(`[...document.querySelectorAll(${JSON.stringify(sel)})].find(e=>e.querySelector('.queue-text')?.textContent===${JSON.stringify(t)})?.querySelector('.queue-x').click()`);
+  const setMode = (v) => ev(`(()=>{const s=document.getElementById("permission-mode");Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,"value").set.call(s,${JSON.stringify(v)});s.dispatchEvent(new Event("change",{bubbles:true}));})()`);
+  const pickProject = (id) => ev(`(()=>{const s=document.getElementById("workspace");Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,"value").set.call(s,${JSON.stringify(id)});s.dispatchEvent(new Event("change",{bubbles:true}));})()`);
+  const bothThemes = async (name) => {
+    await shot(`${name}-dark`);
+    await ev('document.body.classList.add("theme-light")');
+    await sleep(300);
+    await shot(`${name}-light`);
+    await ev('document.body.classList.remove("theme-light")');
+  };
+  // The hero says "!" each time it wakes up: one wake for a whole chain of runs means it never fell asleep in between.
+  await ev('window.__wakes=0;window.__prev="";setInterval(()=>{const b=document.getElementById("bubble")?.textContent||"";if(b==="!"&&window.__prev!=="!")window.__wakes++;window.__prev=b;},40)');
+
+  // 1. A busy run: the box stays usable, Enter queues in order, items can be removed, the cap holds.
+  await sendText('BRIEFRUN one');
+  await waitUntil(stopShown, 5000);
+  check('queue: while busy the box stays enabled and says Enter queues',
+    !(await ev('document.querySelector("#tab-project-chat textarea").disabled')) && /Enter queues/.test(await ev('document.querySelector("#tab-project-chat textarea").placeholder')));
+  await enter('second A');
+  await enter('second B');
+  check('queue: two messages wait in order with a queued badge', JSON.stringify(await qItems()) === JSON.stringify(['second A', 'second B'])
+    && (await ev('document.querySelector(".queue-item .queue-badge")?.textContent')) === 'queued' && /Queued: 2/.test(await qHead()), JSON.stringify(await qItems()));
+  check('queue: ...and are neither shown as sent nor started', !/second/.test(await userBubbles()) && runsWith('second') === 0);
+  await clickText('.queue-item', 'second A');
+  await sleep(250);
+  check('queue: an item can be removed before it is sent', JSON.stringify(await qItems()) === JSON.stringify(['second B']));
+  for (const t of ['second C', 'second D', 'second E', 'second F']) await enter(t);
+  await enter('second G');
+  check('queue: the 6th message is refused at the cap of 5 with a note', (await qItems()).length === 5 && /queue is full \(5 messages\)/.test(await lastMeta()) && !/second G/.test((await qItems()).join('|')), `${(await qItems()).length}; ${await lastMeta()}`);
+  for (const t of ['second D', 'second E', 'second F']) await clickText('.queue-item', t);
+  await sleep(250);
+  check('queue: back to B and C after removing three', JSON.stringify(await qItems()) === JSON.stringify(['second B', 'second C']), JSON.stringify(await qItems()));
+  await bothThemes('queue');
+
+  // 2. The run ends cleanly: B goes out by itself, then C, in order, and the hero never goes to sleep in between.
+  check('queue: after a clean end the first message is sent by itself', await waitUntil(() => runsWith('second B') === 1, 40000));
+  check('queue: ...it is saved as a user message only now, and leaves the queue', /second B/.test(await userBubbles()) && !/second C/.test(await userBubbles()) && JSON.stringify(await qItems()) === JSON.stringify(['second C']), JSON.stringify(await qItems()));
+  check('queue: the second message follows once that run ends', await waitUntil(() => runsWith('second C') === 1, 40000));
+  await sleep(1500);
+  await waitUntil(async () => !(await stopShown()), 40000);
+  const lines = runLines();
+  const order = ['BRIEFRUN one', 'second B', 'second C'].map((t) => lines.findIndex((l) => l.includes(t)));
+  check('queue: runs happened in order, each exactly once', order.every((i, n) => i >= 0 && (n === 0 || i > order[n - 1])) && runsWith('second A') === 0 && runsWith('second D') === 0, order.join(','));
+  check('queue: the replies echo the queued tasks', /task=second B/.test(await ev('document.getElementById("tab-project-chat").innerText')) && /task=second C/.test(await ev('document.getElementById("tab-project-chat").innerText')));
+  check('queue: the hero woke once for the whole chain (never slept in between)', (await ev('window.__wakes')) === 1, `${await ev('window.__wakes')} wake(s)`);
+  await sleep(3500);
+  check('queue: the hero sleeps once everything is done', await ev('document.getElementById("hero").classList.contains("sleeping")') && (await qItems()).length === 0);
+
+  // 3. Stop pauses the queue: nothing is sent by itself, Resume sends it. A paused item stays with its own workspace.
+  await sendText('LONGRUN stop-case');
+  await waitUntil(stopShown, 5000);
+  await enter('after stop');
+  await click('#tab-project-chat .stop');
+  check('queue: Stop ends the run', await waitUntil(async () => !(await stopShown()), 20000));
+  await sleep(400);
+  check('queue: Stop pauses the queue (item kept, Resume and Clear offered)', JSON.stringify(await qItems()) === JSON.stringify(['after stop'])
+    && /paused/i.test(await qHead()) && (await ev('!!document.querySelector(".queue-resume")')) && (await ev('!!document.querySelector(".queue-clear")'))
+    && /Queue paused \(Stop\)/.test(await lastMeta()), `${await qHead()}; ${await lastMeta()}`);
+  await bothThemes('queue-paused');
+  await sleep(4000);
+  check('queue: after Stop nothing is sent by itself', runsWith('after stop') === 0 && !/after stop/.test(await userBubbles()));
+  await pickProject('sim-ws2');
+  await sleep(1500);
+  check('queue: another workspace does not show or send the item', (await qItems()).length === 0 && runsWith('after stop') === 0);
+  await sleep(2000);
+  await pickProject('sim-ws');
+  await sleep(1500);
+  check('queue: back in the original workspace the item is still waiting (paused)', JSON.stringify(await qItems()) === JSON.stringify(['after stop']) && /paused/i.test(await qHead()) && runsWith('after stop') === 0);
+  await click('.queue-resume');
+  check('queue: Resume sends it, in the workspace it was typed in', await waitUntil(() => runsWith('after stop') === 1, 20000)
+    && runLines().find((l) => l.includes('after stop')).split('|')[0].endsWith('/project'), runLines().find((l) => l.includes('after stop')));
+  check('queue: ...and it is a saved user message and the queue is empty', /after stop/.test(await userBubbles()) && (await qItems()).length === 0);
+  await waitUntil(async () => !(await stopShown()), 40000);
+
+  // 4. Clear drops what waits.
+  await sendText('LONGRUN clear-case');
+  await waitUntil(stopShown, 5000);
+  await enter('cc-one');
+  await enter('cc-two');
+  await click('#tab-project-chat .stop');
+  await waitUntil(async () => !(await stopShown()), 20000);
+  await sleep(400);
+  check('queue: Stop with two waiting keeps both, paused', (await qItems()).length === 2 && /paused/i.test(await qHead()));
+  await click('.queue-clear');
+  await sleep(300);
+  check('queue: Clear empties it and the bar goes away', (await qItems()).length === 0 && !(await ev('!!document.querySelector(".queue-bar")')));
+  await sleep(3000);
+  check('queue: cleared messages are never sent', runsWith('cc-one') === 0 && runsWith('cc-two') === 0);
+
+  // 5. A run that fails also pauses the queue.
+  await sendText('SLOWFAIL go');
+  await waitUntil(stopShown, 5000);
+  await enter('after fail');
+  check('queue: the failing run ends', await waitUntil(async () => !(await stopShown()), 20000));
+  await sleep(500);
+  check('queue: an error pauses the queue with a note (nothing sent)', JSON.stringify(await qItems()) === JSON.stringify(['after fail']) && /paused/i.test(await qHead())
+    && /Queue paused: the run did not finish cleanly/.test(await lastMeta()), `${await qHead()}; ${await lastMeta()}`);
+  await sleep(3000);
+  check('queue: ...and it stays unsent', runsWith('after fail') === 0);
+  await click('.queue-clear');
+  await sleep(300);
+
+  // 6. What must stay immediate while Claude is busy, and agent tabs as before.
+  await sendText('LONGRUN immediate');
+  await waitUntil(stopShown, 5000);
+  const tabsBusy = (await tabList()).length;
+  await enter('summon yoda');
+  await sleep(700);
+  check('queue: "summon <name>" is not queued while busy', (await qItems()).length === 0 && /summon yoda/.test(await userBubbles()) && runsWith('summon yoda') === 0);
+  await enter('/alpha imm job');
+  await waitUntil(async () => (await tabList()).length === tabsBusy + 1, 8000);
+  check('queue: "/<agent> task" starts at once while busy and is not queued', (await tabList()).length === tabsBusy + 1 && (await qItems()).length === 0, (await tabList()).join(','));
+  await click('.agent-tab:first-child');
+  await sleep(300);
+  await enter('/plan');
+  await sleep(500);
+  check('queue: a bare "/plan" still toggles Plan only while busy', (await ev('document.getElementById("permission-mode").value')) === 'plan' && (await qItems()).length === 0);
+  await enter('/plan do a thing');
+  await sleep(400);
+  check('queue: "/plan <task>" while busy is refused, not queued', /not sent or queued/.test(await lastMeta()) && (await qItems()).length === 0, await lastMeta());
+  await setMode('default');
+  await sleep(300);
+  await enter('zz-queued');
+  await openTab((await tabList()).find((n) => n.startsWith('alpha')) && (await tabList()).filter((n) => n.startsWith('alpha')).slice(-1)[0]);
+  await sleep(300);
+  await type(ta, 'hey agent');
+  await sleep(150);
+  await key(ta, 'Enter');
+  await sleep(300);
+  check('queue: an agent tab keeps its behaviour (no queue bar, a busy agent does not queue)', !(await ev('!!document.querySelector(".queue-bar")')) && (await textareaValue()) === 'hey agent');
+  await type(ta, '');
+  await click('.agent-tab:first-child');
+  await sleep(300);
+  check('queue: ...and the Expedition tab still shows its queue', JSON.stringify(await qItems()) === JSON.stringify(['zz-queued']));
+  await click('#tab-project-chat .stop');
+  await waitUntil(async () => !(await stopShown()), 20000);
+  await sleep(500);
+  check('queue: Stop with agents around still pauses and sends nothing', /paused/i.test(await qHead()) && runsWith('zz-queued') === 0);
+  await click('.queue-clear');
+  await sleep(3000);
 
   // ===== Phase 2: map bosses, trophies, crits and combos, in a second app run with its own settings =====
   // Gandalf (a summoned hero with high ATK) at 4 kills on the forest map, in the light theme. The settings
