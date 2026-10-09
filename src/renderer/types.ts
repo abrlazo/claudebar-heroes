@@ -145,7 +145,7 @@ export interface Background {
 // ----- Events streamed from the main process -----
 
 export interface ClaudeEvent {
-  type: 'start' | 'session' | 'turn' | 'usage' | 'thinking' | 'text' | 'tool' | 'subagent' | 'result' | 'error' | 'end';
+  type: 'start' | 'session' | 'turn' | 'usage' | 'thinking' | 'text' | 'tool' | 'subagent' | 'result' | 'error' | 'end' | 'permission' | 'permission-resolved';
   wsId?: string;
   sessionId?: string;
   text?: string;
@@ -175,6 +175,36 @@ export interface ClaudeEvent {
   description?: string;
   prompt?: string;
   inner?: 'tool' | 'text';
+  /**
+   * 'permission' = Claude asks to use a tool (Ask me each time): `requestId` plus what the card shows (all text is
+   * already sanitised and capped by main). 'permission-resolved' = that request is over: `how` says why.
+   */
+  requestId?: string;
+  tool?: string;
+  detail?: string;
+  truncatedLines?: number;
+  truncated?: boolean;
+  path?: string;
+  viaSubagent?: boolean;
+  expiresAt?: number;
+  how?: 'allowed' | 'denied' | 'timeout' | 'cancelled' | 'stopped' | 'ended';
+}
+
+/** Whose process asked: the project chat (Quest) of a workspace, or one /<agent> process. */
+export type PermissionOwner = { kind: 'quest'; wsId: string } | { kind: 'agent'; agentId: string };
+
+/** A pending permission request, as the card shows it. Main holds the real thing; this is only a view. */
+export interface PermissionRequest {
+  requestId: string;
+  owner: PermissionOwner;
+  tool: string;
+  summary: string;
+  detail: string;
+  truncatedLines: number;
+  truncated: boolean;
+  path: string;
+  viaSubagent: boolean;
+  expiresAt: number;
 }
 
 export interface AgentEvent extends ClaudeEvent {
@@ -242,6 +272,11 @@ export interface Bar {
   /** Whether the project has .claude/review.md (the path comes from the workspace). */
   projectHasReview(wsId: string): Promise<boolean>;
   cancelAgent(wsId: string, agentId: string): Promise<Settings | null>;
+  /**
+   * Answers a pending permission request of the project chat (`target` 'quest', agentId null) or of one agent.
+   * Main accepts it only for a request it recorded as pending and answers from its own stored copy of the tool input.
+   */
+  answerPermission(target: 'quest' | 'agent', agentId: string | null, requestId: string, decision: 'allow' | 'deny'): Promise<{ ok: boolean }>;
   listAgents(wsId: string): Promise<AgentRecord[]>;
   /** Stores a retired / closed agent's chat in the project's archive (main clamps it; null = refused). */
   archiveAgent(wsId: string, record: Omit<ArchivedAgent, 'archivedAt'>): Promise<{ archive: ArchivedAgent[] } | null>;

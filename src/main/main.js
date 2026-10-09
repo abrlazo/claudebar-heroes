@@ -148,6 +148,14 @@ function createWindow() {
 
   if (isDev) win.webContents.openDevTools({ mode: 'detach' });
 
+  // A reload loses the cards but not the runs: deny what is pending so nothing waits for an answer nobody can give.
+  win.webContents.on('did-start-navigation', (details, ...legacy) => {
+    const mainFrame = details && typeof details === 'object' && 'isMainFrame' in details ? details.isMainFrame : legacy[2];
+    if (mainFrame !== true) return;
+    mainHandle?.denyPending?.();
+    agents.denyAllPermissions();
+  });
+
   win.on('closed', () => { win = null; });
 }
 
@@ -373,8 +381,10 @@ function registerIpc() {
       return;
     }
     runningWsId = ws.id;
+    const permissionMode = settings.get().permissionMode;
     mainHandle = claude.run(
-      { prompt, cwd: ws.path, sessionId: ws.sessionId, permissionMode: settings.get().permissionMode, model },
+      // 'default' = "Ask me each time": Claude asks through the app (permission events) instead of failing.
+      { prompt, cwd: ws.path, sessionId: ws.sessionId, permissionMode, model, promptMode: permissionMode === 'default' ? 'host' : 'plain' },
       (event) => {
         // Everything is saved to the workspace that started the run.
         if (event.sessionId) settings.updateWorkspace(ws.id, { sessionId: event.sessionId });
@@ -393,6 +403,20 @@ function registerIpc() {
   });
 
   ipcMain.on('claude:cancel', () => mainHandle?.cancel());
+
+  // The answer to a permission card. Everything from the renderer is checked here; the tool input is never read
+  // from it: the run answers from the copy it stored when Claude asked, and only for a request it holds as pending.
+  ipcMain.handle('permission:answer', (_e, payload) => {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return { ok: false };
+    const { target, agentId, requestId, decision } = payload;
+    if (typeof requestId !== 'string' || !requestId || requestId.length > 100) return { ok: false };
+    if (decision !== 'allow' && decision !== 'deny') return { ok: false };
+    if (target === 'quest') return { ok: !!mainHandle?.running && mainHandle.answerPermission(requestId, decision) };
+    if (target === 'agent' && typeof agentId === 'string' && agentId && agentId.length <= 100) {
+      return { ok: agents.answerPermission(agentId, requestId, decision) };
+    }
+    return { ok: false };
+  });
 
   ipcMain.on('general-chat:send', (_e, { prompt, model } = {}) => {
     const emit = (event) => win?.webContents.send('general-chat:event', event);
