@@ -8,6 +8,7 @@ import type { AgentsApi } from '../../hooks/useAgents';
 import type { ClaudeRun } from '../../hooks/useClaudeRun';
 import { usageLine } from '../../hooks/useClaudeRun';
 import type { WorkspaceActions } from '../../hooks/useWorkspaceActions';
+import type { QueuedMessage } from '../../lib/queue';
 import type { ModelAlias, PermissionMode, Workspace } from '../../types';
 
 const IMPORT = '__import__';
@@ -23,12 +24,22 @@ const PERMISSION_MODES: [PermissionMode, string][] = [
  * model / permission controls. While agents are running, the log can show an
  * agent's output instead of the project conversation.
  */
+export interface QueueView {
+  items: QueuedMessage[];
+  paused: boolean;
+  onRemove: (id: string) => void;
+  onClear: () => void;
+  onResume: () => void;
+}
+
 export interface ProjectChatProps {
   ws: Workspace | null;
   run: ClaudeRun;
   agents: AgentsApi;
   busy: boolean;
   projectBusy?: boolean;
+  /** Messages waiting for Claude's run to end (Expedition tab only). */
+  queue?: QueueView;
   model: ModelAlias;
   onModelChange: (model: ModelAlias) => void;
   onSend: (text: string) => void;
@@ -39,7 +50,7 @@ export interface ProjectChatProps {
 }
 
 export function ProjectChat({
-  visible, ws, run, agents, busy, projectBusy, model, onModelChange, onSend, onStop, workspaceActions, archive,
+  visible, ws, run, agents, busy, projectBusy, queue, model, onModelChange, onSend, onStop, workspaceActions, archive,
 }: ProjectChatProps & { visible: boolean }) {
   const { settings, updateSettings } = useSettings();
   const { suggestions, refresh: refreshCommands } = useCommandCatalog(ws?.id ?? null);
@@ -70,10 +81,27 @@ export function ProjectChat({
       />
       <MessageLog messages={messages} streaming={streaming} streamingThinking={streamingThinking} working={working} visible={visible} />
       {liveUsage && <div className="run-usage">{`Tokens this run: ${usageLine(liveUsage)}`}</div>}
+      {!agent && queue && queue.items.length > 0 && (
+        <div className="queue-bar" role="region" aria-label="Queued messages">
+          <div className="queue-head">
+            <span>{queue.paused ? `Queue paused: ${queue.items.length}` : `Queued: ${queue.items.length}`}</span>
+            {queue.paused && <button type="button" className="queue-btn queue-resume" onClick={queue.onResume}>Resume</button>}
+            <button type="button" className="queue-btn queue-clear" onClick={queue.onClear}>Clear</button>
+          </div>
+          {queue.items.map((item) => (
+            <div key={item.id} className="queue-item" title={item.text}>
+              <span className="queue-text">{item.text}</span>
+              <span className="queue-badge">queued</span>
+              <button type="button" className="queue-x" aria-label="Remove queued message" onClick={() => queue.onRemove(item.id)}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
       <Composer
         focused={visible}
         busy={agent ? agent.status === 'running' : (projectBusy ?? busy)}
         disabled={!ws || !!agent?.observed}
+        queueable={!agent}
         onSend={onSend}
         suggestions={suggestions}
         onSuggestionsOpen={refreshCommands}
@@ -82,6 +110,8 @@ export function ProjectChat({
           ? "Claude is running this agent; it can't be messaged. Stop ends the whole run."
           : agent
           ? `Message ${agent.name}… (Enter to send, Shift+Enter for a new line)`
+          : ws && projectBusy
+            ? 'Claude is busy: Enter queues your message (Shift+Enter for a new line)'
           : ws
             ? `Ask Claude about ${ws.name}… (Enter to send, Shift+Enter for a new line)`
             : 'Import a project to start'}

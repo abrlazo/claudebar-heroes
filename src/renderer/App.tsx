@@ -7,6 +7,8 @@ import { useGameEngine } from './hooks/useGameEngine';
 import { useStageStatus } from './hooks/useStageStatus';
 import { useAchievements } from './hooks/useAchievements';
 import { useClaudeRun } from './hooks/useClaudeRun';
+import type { RunEnd } from './hooks/useClaudeRun';
+import { useMessageQueue } from './hooks/useMessageQueue';
 import { useAgents } from './hooks/useAgents';
 import { useGeneralChat } from './hooks/useGeneralChat';
 import { usePanel } from './hooks/usePanel';
@@ -20,6 +22,7 @@ import { BOSSES } from './engine/enemies.js';
 import { MAX_AGENTS, MAX_CHAIN_STEPS, parseAgentChain, parseAgentInvocation } from './lib/agents';
 import type { AgentInvocation } from './lib/agents';
 import { bar } from './lib/bridge';
+import { MAX_QUEUED } from './lib/queue';
 import type { Workspace } from './types';
 import { levelFor, xpFor } from './lib/leveling';
 import { DEFAULT_ASK_MODEL, DEFAULT_PROJECT_MODEL } from './lib/models';
@@ -76,21 +79,47 @@ function AppShell() {
     archive: archiveAgent,
     onUnclaimed: (ev) => replayRef.current(ev),
   });
+  // Messages typed while Claude's run is busy wait here and go out one by one (see `drainQueue`).
+  const queue = useMessageQueue();
+  const projectModelRef = useRef(projectModel);
+  projectModelRef.current = projectModel;
+  /**
+   * Sends the next queued message of a workspace when nothing is running. Only for the ACTIVE workspace,
+   * because `claude:send` runs in main's active one; other workspaces keep their queue until they are active.
+   * Everything it reads is synchronous (`busyNow`, the queue ref), so it can never send twice or send while busy.
+   * The model is the one picked now and the permission mode is read by main when it spawns, not when queued.
+   */
+  const drainQueue = (id: string) => {
+    if (run.busyNow() || queue.isPaused(id) || getSettings().activeId !== id) return;
+    const next = queue.take(id);
+    if (next) run.send(id, next.text, projectModelRef.current);
+  };
+  // After a run: a clean end sends the next message at once (inside the end event, so the hero never
+  // falls asleep in between); Stop, an error or a rejected send pause the queue instead.
+  const onRunEnd = ({ wsId: endedId, clean, stopped }: RunEnd) => {
+    if (!endedId) return;
+    if (clean) { drainQueue(endedId); return; }
+    const waiting = queue.items(endedId).length;
+    if (!waiting) return;
+    queue.pause(endedId);
+    persistMessage(endedId, { kind: 'meta', text: stopped
+      ? `Queue paused (Stop). ${waiting} message${waiting > 1 ? 's are' : ' is'} waiting: resume or clear below the chat.`
+      : 'Queue paused: the run did not finish cleanly. Resume or clear it below the chat.' });
+  };
   const run = useClaudeRun({
     game, say, setStatus, stageRef: refs.stageRef, busyRef,
-    observe: agents.observe, endObserved: agents.endObserved,
+    observe: agents.observe, endObserved: agents.endObserved, onEnd: onRunEnd,
   });
   replayRef.current = run.replay;
   const ask = useGeneralChat();
   const panel = usePanel();
 
   // busy blocks UI changes; projectBusy only blocks project chat send
-  const busy = run.running || agents.running;
-  const projectBusy = run.running;
+  // `starting` covers the gap between a send and the run's first event.
+  const busy = run.running || run.starting || agents.running;
+  const projectBusy = run.running || run.starting;
   busyRef.current = busy;
   // Read after an await, where the values captured by the render may be stale.
-  const projectBusyRef = useRef(false);
-  projectBusyRef.current = projectBusy;
   const selectedAgentRef = useRef<string | null>(null);
   selectedAgentRef.current = agents.selectedId;
 
@@ -101,6 +130,12 @@ function AppShell() {
     else { game.sleep(); ach.flush(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- flush is stable
   }, [busy, game]);
+
+  // Resume, a message queued as a run ended, or switching back to a workspace with waiting messages.
+  useEffect(() => {
+    if (ws && !projectBusy) drainQueue(ws.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- drainQueue reads refs; re-run on these changes
+  }, [ws?.id, projectBusy, queue.state]);
 
   const workspaceActions = useWorkspaceActions({ busy, say });
   useClickThrough();
@@ -190,6 +225,10 @@ function AppShell() {
     }
   };
 
+  // Read after an await, so it uses the hook's refs, not the render's values. Waiting messages keep their
+  // order unless the queue is paused (then a typed message goes out at once, as when idle).
+  const mustQueue = (id: string) => run.busyNow() || (queue.items(id).length > 0 && !queue.isPaused(id));
+
   const sendProjectPrompt = async (typed: string) => {
     if (!ws) return;
     let text = typed;
@@ -226,10 +265,10 @@ function AppShell() {
       const plan = text.match(PLAN_COMMAND);
       if (plan) {
         const task = (plan[1] ?? '').trim();
-        if (task && !selectedAgentRef.current && projectBusyRef.current) {
+        if (task && !selectedAgentRef.current && mustQueue(ws.id)) {
           // Check before changing the mode, so a refused task leaves the settings alone.
           persistMessage(ws.id, { kind: 'user', text });
-          persistMessage(ws.id, { kind: 'meta', text: 'Claude is busy, so that /plan task was not sent. Try again when it finishes.' });
+          persistMessage(ws.id, { kind: 'meta', text: 'Claude is busy, so that /plan task was not sent or queued. Try again when it finishes.' });
           return;
         }
         if (settings.permissionMode !== 'plan') {
@@ -250,7 +289,13 @@ function AppShell() {
       agents.message(ws, agent.id, text, permissionMode);
       return;
     }
-    if (projectBusyRef.current) return;
+    if (mustQueue(ws.id)) {
+      // Claude is busy (or earlier queued messages are still ahead of this one): wait in line.
+      if (!queue.add(ws.id, text)) {
+        persistMessage(ws.id, { kind: 'meta', text: `The queue is full (${MAX_QUEUED} messages). That one was not queued.` });
+      }
+      return;
+    }
     agents.select(null);
     run.send(ws.id, text, projectModel);
   };
@@ -276,6 +321,13 @@ function AppShell() {
         project={{
           ws, run, agents, busy, projectBusy, workspaceActions,
           archive: { count: ws?.archive?.length ?? 0, open: panel.drawerOpen, toggle: () => { void panel.toggleDrawer(); } },
+          queue: ws ? {
+            items: queue.items(ws.id),
+            paused: queue.isPaused(ws.id),
+            onRemove: (id) => queue.remove(ws.id, id),
+            onClear: () => queue.clear(ws.id),
+            onResume: () => queue.resume(ws.id),
+          } : undefined,
           model: projectModel, onModelChange: setProjectModel, onSend: sendProjectPrompt, onStop: stop,
         }}
         ask={{ chat: ask, model: askModel, onModelChange: setAskModel }}

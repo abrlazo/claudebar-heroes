@@ -16,6 +16,8 @@ interface ComposerProps {
   /** Swaps Send for Stop. */
   busy: boolean;
   disabled?: boolean;
+  /** While busy, Enter still calls onSend (the caller queues it) and Stop stays the only button. */
+  queueable?: boolean;
   placeholder: string;
   /** Focuses the textarea when it becomes true. */
   focused: boolean;
@@ -26,7 +28,7 @@ interface ComposerProps {
 }
 
 export function Composer({
-  onSend, onStop, busy, disabled = false, placeholder, focused, suggestions, onSuggestionsOpen,
+  onSend, onStop, busy, disabled = false, queueable = false, placeholder, focused, suggestions, onSuggestionsOpen,
 }: ComposerProps) {
   const [text, setText] = useState('');
   const [active, setActive] = useState(0);
@@ -54,7 +56,7 @@ export function Composer({
 
   const submit = () => {
     const value = text.trim();
-    if (!value || busy || disabled) return;
+    if (!value || (busy && !queueable) || disabled) return;
     setText('');
     onSend(value);
   };
