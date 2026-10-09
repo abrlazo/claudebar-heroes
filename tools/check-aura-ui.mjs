@@ -21,7 +21,8 @@ const check = (name, ok, detail = '') => { if (!ok) failed++; console.log(`${ok 
 // A claude that works for a while: an init event, then a tool call every 2 s.
 const fake = path.join(work, 'fake-claude.sh');
 fs.writeFileSync(fake, `#!/bin/bash
-cat >/dev/null
+# Ask mode (settings below) keeps stdin open and sends one JSON line, so read one line instead of waiting for the end.
+read -r _
 printf '%s\\n' '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}'
 for i in $(seq 1 30); do sleep 2 & wait $!; printf '%s\\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x.ts"}}]}}'; done
 `, { mode: 0o755 });
