@@ -266,8 +266,8 @@ function registerIpc() {
       designing.delete(name);
     }
   });
-  // Keep in sync with BOSSES in src/renderer/engine/enemies.js.
-  const isBossId = (id) => typeof id === 'string' && /^boss:(forest|desert|snowy|lava|night)$/.test(id);
+  // Keep in sync with BOSSES and LEGENDARY_BOSS in src/renderer/engine/enemies.js.
+  const isBossId = (id) => typeof id === 'string' && /^boss:(forest|desert|snowy|lava|night|legendary)$/.test(id);
   ipcMain.handle('workspace:trophy', (_e, id, bossId) => (
     typeof id === 'string' && isBossId(bossId) ? settings.addTrophy(id, bossId) : settings.get()
   ));
