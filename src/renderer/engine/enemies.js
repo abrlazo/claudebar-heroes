@@ -9,9 +9,10 @@
 //   idle  - slight sway (waiting in line behind the monster that is fighting)
 
 /**
- * @typedef {{kind: 'goblin'|'skeleton'|'orc'|'imp', name: string, skin: string,
- *            cloth: string, weapon: 'club'|'dagger'|'axe'|'sword', hp: number,
- *            id?: string, boss?: boolean}} MonsterLook
+ * @typedef {{kind: 'goblin'|'skeleton'|'orc'|'imp'|'dragon', name: string, skin: string,
+ *            cloth: string, weapon: 'club'|'dagger'|'axe'|'sword'|null, hp: number,
+ *            id?: string, boss?: boolean, legendary?: boolean,
+ *            w?: number, h?: number, ox?: number, oy?: number}} MonsterLook
  */
 
 /** @type {Record<string, MonsterLook[]>} */
@@ -58,6 +59,17 @@ export const BOSSES = {
   snowy: { id: 'boss:snowy', boss: true, kind: 'orc', name: 'Rimefang, Ice Tyrant', skin: '#c0261d', cloth: '#1c2a44', weapon: 'club', hp: 5 },
   lava: { id: 'boss:lava', boss: true, kind: 'imp', name: 'Pyrax, Cinder Lord', skin: '#2ec4ff', cloth: '#0a2a44', weapon: 'dagger', hp: 5 },
   night: { id: 'boss:night', boss: true, kind: 'goblin', name: 'Nyx, Goblin Queen', skin: '#e6ff3a', cloth: '#2a1a3a', weapon: 'axe', hp: 5 },
+};
+
+/**
+ * The legendary boss: ONE per stage roll (LEGENDARY_CHANCE in boss.js), on any map, replacing the
+ * map boss. A drawn dragon on a wider canvas (64x40, shown 96x60). Keep the id in sync with
+ * `isBossId` in main/main.js.
+ * @type {MonsterLook}
+ */
+export const LEGENDARY_BOSS = {
+  id: 'boss:legendary', boss: true, legendary: true, kind: 'dragon', name: 'Azurath, the Frost Dragon',
+  skin: '#1f5fd6', cloth: '#071a4a', weapon: null, hp: 10, w: 64, h: 40, ox: 4, oy: 4,
 };
 
 // The figure is drawn in a 32x32 box inside a larger canvas so the raised
@@ -275,6 +287,102 @@ const BODIES = {
     rect('#fff', hx + 6, hy + 7, 1, 1);
     return { x: 11 - lean, y: 18 - bob, w: 2, head: { x: hx, y: hy, w: 11 } };
   },
+
+  // Legendary frost dragon (facing left, head at the left). Drawn in a 56x32 box inside its 64x40 canvas.
+  dragon(p) {
+    const { rect, ctx, walking, fighting, stride, bob, slam, lean, phase, skin, dark } = p;
+    const OUT = '#071233';
+    const blob = (color, x, y, w, h) => {              // outlined rounded block
+      rect(OUT, x - 1, y, w + 2, h);
+      rect(OUT, x, y - 1, w, h + 2);
+      rect(color, x, y, w, h);
+    };
+    const flap = Math.sin(phase * (walking ? 3 : fighting ? 4 : 1.5)) * 4;
+
+    // Far wing (darker) behind the body, then the tail.
+    ctx.fillStyle = '#0e3a8a';
+    ctx.beginPath();
+    ctx.moveTo(40, 15 - bob); ctx.lineTo(46, 1 + flap * 0.8 - bob); ctx.lineTo(57, 7 + flap * 0.5); ctx.lineTo(51, 12); ctx.lineTo(55, 18);
+    ctx.closePath(); ctx.fill();
+    for (let i = 0; i < 5; i++) {
+      const ty = 21 - i * 1.4 + Math.sin(phase * 2.5 - i * 0.7) * 2;
+      const th = 5 - Math.floor(i * 0.5);
+      rect(OUT, 47 + i * 2.6 - 1, ty - 1, 4, th + 2);
+      rect(i % 2 ? dark : skin, 47 + i * 2.6, ty, 3, th);
+    }
+    const tipY = 21 - 4 * 1.4 + Math.sin(phase * 2.5 - 4 * 0.7) * 2;
+    ctx.fillStyle = '#dff6ff';                         // spade tip
+    ctx.beginPath(); ctx.moveTo(57, tipY - 2); ctx.lineTo(60, tipY + 1); ctx.lineTo(57, tipY + 4); ctx.closePath(); ctx.fill();
+
+    // Legs: thick, pale claws.
+    const frontX = 28 + (walking ? stride * 3 : fighting ? -1 : 0);
+    const backX = 41 - (walking ? stride * 3 : 0);
+    const frontLift = walking ? Math.max(0, Math.cos(phase)) * 2 : 0;
+    const backLift = walking ? Math.max(0, -Math.cos(phase)) * 2 : 0;
+    rect(OUT, backX - 1, 23, 7, 8 - backLift);
+    rect(dark, backX, 24, 5, 6 - backLift);
+    p.foot(backX - 1, backLift, 7, '#bfe9ff');
+    rect(OUT, frontX - 1, 23, 7, 8 - frontLift);
+    rect(skin, frontX, 24, 5, 6 - frontLift);
+    p.foot(frontX - 1, frontLift, 7, '#dff6ff');
+
+    // Torso with a light belly and ice spines along the back.
+    const ty = 14 - bob;
+    blob(skin, 28, ty, 22, 13);
+    rect('#7fd4ff', 30, ty + 9, 18, 3);
+    rect(dark, 30, ty + 8, 18, 1);
+    ctx.fillStyle = '#dff6ff';
+    for (let x = 30; x <= 46; x += 4) {
+      ctx.beginPath(); ctx.moveTo(x, ty); ctx.lineTo(x + 2, ty - 3 - (bob > 0.5 ? 1 : 0)); ctx.lineTo(x + 4, ty); ctx.closePath(); ctx.fill();
+    }
+
+    // Near wing (lighter membrane, dark bones).
+    ctx.fillStyle = '#4aa3ff';
+    ctx.beginPath();
+    ctx.moveTo(34, 15 - bob); ctx.lineTo(37, 0 + flap - bob); ctx.lineTo(50, 6 + flap * 0.6); ctx.lineTo(44, 11); ctx.lineTo(48, 16); ctx.lineTo(38, 17 - bob);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#0e3a8a'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(34, 15 - bob); ctx.lineTo(37, 0 + flap - bob);
+    ctx.moveTo(34, 15 - bob); ctx.lineTo(50, 6 + flap * 0.6);
+    ctx.moveTo(34, 15 - bob); ctx.lineTo(44, 11);
+    ctx.stroke();
+
+    // Neck rising to the head.
+    for (let i = 0; i < 3; i++) blob(i % 2 ? dark : skin, 27 - i * 3 - lean * 0.5, 16 - i * 2 - bob, 8, 7);
+    const hx = 11 - lean - slam;
+    const hy = 5 + (walking ? Math.sin(phase * 2) * 1.2 : fighting ? Math.sin(phase * 3) * 0.5 : 0) - bob;
+    const open = fighting ? (Math.sin(phase * 7) > 0 ? 2 : 1) : walking && Math.sin(phase * 2) > 0.6 ? 1 : 0;
+
+    // Horns swept back.
+    ctx.fillStyle = '#dff6ff';
+    ctx.beginPath(); ctx.moveTo(hx + 8, hy); ctx.lineTo(hx + 15, hy - 6); ctx.lineTo(hx + 11, hy + 2); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(hx + 4, hy); ctx.lineTo(hx + 9, hy - 5); ctx.lineTo(hx + 8, hy + 2); ctx.closePath(); ctx.fill();
+    // Head, snout, jaw.
+    blob(skin, hx, hy, 13, 8);
+    blob(skin, hx - 4, hy + 2, 6, 5);
+    rect(OUT, hx - 4, hy + 7, 10, 3 + open);
+    rect(dark, hx - 3, hy + 7 + open, 9, 2);
+    if (open) rect('#12101a', hx - 3, hy + 7, 9, open);
+    rect('#ffffff', hx - 3, hy + 7, 1, 1);
+    rect('#ffffff', hx + 1, hy + 7, 1, 1);
+    rect('#12101a', hx - 3, hy + 3, 1, 1);                      // nostril
+    rect('#e8ffff', hx + 3, hy + 2, 3, 3);                      // glowing eye
+    rect('#00e5ff', hx + 3, hy + 3, 2, 2);
+    rect('#071233', hx + 3, hy + 3, 1, 1);
+
+    // Frost breath streams from the mouth while it fights.
+    if (fighting) {
+      for (let i = 0; i < 4; i++) {
+        const t = (phase * 2 + i * 0.25) % 1;
+        const size = slam > 0 ? 3 : 2;
+        ctx.globalAlpha = 1 - t * 0.7;
+        rect(i % 2 ? '#bff3ff' : '#6fd8ff', hx - 5 - t * 10, hy + 6 + (i - 1.5) * t * 1.5, size, size);
+      }
+      ctx.globalAlpha = 1;
+    }
+    return { x: 0, y: 0, w: 0, arm: false, head: { x: hx, y: hy, w: 13 } };
+  },
 };
 
 /**
@@ -286,8 +394,12 @@ const BODIES = {
  *   `update` redraws and returns true on the frame the weapon lands.
  */
 export function createMonster(canvas, look) {
-  canvas.width = MONSTER_W;
-  canvas.height = MONSTER_H;
+  const cw = look.w ?? MONSTER_W;
+  const ch = look.h ?? MONSTER_H;
+  const ox = look.ox ?? OFFSET_X;
+  const oy = look.oy ?? OFFSET_Y;
+  canvas.width = cw;
+  canvas.height = ch;
   const ctx = canvas.getContext('2d');
   const skin = look.skin;
   const dark = shade(skin, look.kind === 'skeleton' ? -70 : -45);
@@ -331,8 +443,8 @@ export function createMonster(canvas, look) {
 
   function draw() {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, MONSTER_W, MONSTER_H);
-    ctx.translate(OFFSET_X, OFFSET_Y);
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.translate(ox, oy);
     const walking = mode === 'walk';
     const fighting = mode === 'fight';
     const stride = walking ? Math.sin(phase) : 0;
@@ -344,6 +456,7 @@ export function createMonster(canvas, look) {
       ctx, rect, arm, foot, walking, fighting, stride, bob, slam, lean, phase, look, skin, dark,
     });
 
+    if (shoulder.arm === false) return;   // the dragon has no weapon arm and no crown
     if (look.boss) drawCrown(shoulder.head);
 
     // Weapon arm (front): carries the weapon, drives the attack.

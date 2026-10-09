@@ -6,10 +6,10 @@
 import { BACKGROUNDS } from './heroes.js';
 import { createScene } from './scene.js';
 import { createSprite } from './sprite.js';
-import { ENEMY_TYPES, BOSSES, createMonster } from './enemies.js';
+import { ENEMY_TYPES, BOSSES, LEGENDARY_BOSS, createMonster } from './enemies.js';
 import { prestigeFor } from './prestige.js';
 import { createAura } from './aura.js';
-import { rollBoss, stageKey } from './boss.js';
+import { rollBossKind, stageKey } from './boss.js';
 
 const HERO_X = 40;            // hero's fixed screen position
 const HERO_REACH = 46;        // how far in front of HERO_X the hero can hit
@@ -24,6 +24,7 @@ const COMBO_MAX = 5;
 const CRIT_MULT = 2;
 const critChance = (spd) => Math.max(0.08, Math.min(0.3, 0.08 + spd / 1000));
 const BOSS_ATK_MULT = 2;      // a boss hits the hero twice as hard (the swing is only visual)
+const LEGENDARY_ATK_MULT = 3; // the legendary dragon: three times
 
 /**
  * Creates the battle engine. React owns the elements; the engine only draws
@@ -54,7 +55,7 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
     projectiles: [], // magic balls, arrows, etc
     combo: 0,
     comboLeft: 0,
-    bossRoll: null,  // { key, boss }: this stage's boss roll (not persisted)
+    bossRoll: null,  // { key, kind: 'none'|'map'|'legendary' }: this stage's boss roll (not persisted)
   };
   // Damage already dealt to the boss of a map (fraction of its HP left), so a boss
   // interrupted by sleep() comes back wounded instead of at full health.
@@ -122,7 +123,7 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
 
   // ----- Enemies -----
 
-  // `bossLook` (from BOSSES) spawns the map boss instead of a tool-call monster.
+  // `bossLook` (from BOSSES, or LEGENDARY_BOSS) spawns the boss instead of a tool-call monster.
   function spawnEnemy(label, bossLook) {
     const types = ENEMY_TYPES[state.mapId] || ENEMY_TYPES.forest;
     const enemyData = bossLook || types[Math.floor(Math.random() * types.length)];
@@ -132,7 +133,7 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
     if (bossLook) label = bossLook.name;
 
     const el = document.createElement('div');
-    el.className = bossLook ? 'enemy boss' : 'enemy';
+    el.className = bossLook ? (bossLook.legendary ? 'enemy boss legendary' : 'enemy boss') : 'enemy';
 
     const canvas = document.createElement('canvas');
     const monster = createMonster(canvas, enemyData);
@@ -156,7 +157,8 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
 
     const enemy = {
       el, x: stage.clientWidth + 10, hp: maxHp, maxHp, monster, hpFill, look: enemyData, boss: !!bossLook,
-      atk: (6 + mapIndex() * 2 + loops) * (bossLook ? BOSS_ATK_MULT : 1),
+      atk: (6 + mapIndex() * 2 + loops) * (bossLook ? (bossLook.legendary ? LEGENDARY_ATK_MULT : BOSS_ATK_MULT) : 1),
+      legendary: !!bossLook?.legendary,
     };
     if (bossLook) enemy.hp = Math.max(1, Math.round(maxHp * (bossHpFrac[state.mapId] ?? 1)));
     state.enemies.push(enemy);
@@ -285,14 +287,19 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
   function kill(enemy) {
     state.enemies = state.enemies.filter((e) => e !== enemy);
     enemy.el.classList.add('dying');
-    later(() => enemy.el.remove(), 400);
+    later(() => enemy.el.remove(), enemy.legendary ? 1200 : 400);
     state.kills += 1;
     setCombo(state.combo + 1, COMBO_MS);
     hooks.onKill?.(state.kills);
     if (enemy.boss) {
       delete bossHpFrac[state.mapId];
       aura.burst();
-      hooks.say?.('Boss down!', 900);
+      if (enemy.legendary) {
+        later(() => aura.burst(), 300);
+        stage.classList.add('legend-flash');
+        later(() => stage.classList.remove('legend-flash'), 700);
+        hooks.say?.('Legendary boss down!', 1400);
+      } else hooks.say?.('Boss down!', 900);
       hooks.onBossDefeated?.(enemy.look.id);
     }
     if (state.kills % KILLS_PER_MAP === 0) nextMap(enemy.boss);
@@ -311,8 +318,8 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
   // The roll is kept per stage key, so sleep/wake and configure() with the same stage never re-roll.
   function bossThisStage() {
     const key = stageKey(state.mapId, state.kills, KILLS_PER_MAP);
-    if (!state.bossRoll || state.bossRoll.key !== key) state.bossRoll = { key, boss: rollBoss() };
-    return state.bossRoll.boss;
+    if (!state.bossRoll || state.bossRoll.key !== key) state.bossRoll = { key, kind: rollBossKind() };
+    return state.bossRoll.kind;
   }
 
   // ----- Map progression -----
@@ -433,13 +440,14 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
     const last = state.enemies[state.enemies.length - 1];
     const roomToSpawn = !last || last.x < stage.clientWidth - 90;
     if (state.nextSpawnIn <= 0 && roomToSpawn) {
-      // Bosses are rare: each stage rolls once (BOSS_CHANCE) when the line (kills so far + monsters
+      // Bosses are rare: each stage rolls once (BOSS_CHANCE map boss, LEGENDARY_CHANCE dragon) when the line (kills so far + monsters
       // alive) first reaches 7. On a hit only the boss spawns, so it is the stage-clearing kill and
       // never buried in a queue. On a miss normal monsters keep spawning and the stage clears at 8 kills.
       const inLine = (state.kills % KILLS_PER_MAP) + state.enemies.length;
-      if (inLine >= KILLS_PER_MAP - 1 && bossThisStage()) {
+      const kind = inLine >= KILLS_PER_MAP - 1 ? bossThisStage() : 'none';
+      if (kind !== 'none') {
         if (!state.enemies.some((e) => e.boss)) {
-          spawnEnemy(null, BOSSES[state.mapId] || BOSSES.forest);
+          spawnEnemy(null, kind === 'legendary' ? LEGENDARY_BOSS : BOSSES[state.mapId] || BOSSES.forest);
           state.nextSpawnIn = 1500;
         }
       } else {
@@ -458,6 +466,7 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
       resizeObserver.disconnect();
       timers.forEach(clearTimeout);
       timers.clear();
+      stage.classList.remove('legend-flash');
       for (const e of state.enemies) e.el.remove();
       state.enemies = [];
       comboEl.remove();
