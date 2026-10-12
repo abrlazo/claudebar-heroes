@@ -878,3 +878,28 @@ body.theme-light .achievement { border-color: #a06a00; }
 .achievement-name { font-weight: bold; }
 .achievement-desc { color: var(--muted); }
 .achievement.locked { border-color: transparent; opacity: 0.55; }
+
+/* ---------- Notifications: settings and the in-panel toast ---------- */
+
+.settings-controls label.notify-option { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 12px; cursor: pointer; }
+.settings-controls label.notify-option input { margin: 0; }
+#notify-test { margin: 2px 0 6px; }
+#notify-test-note { font-size: 11px; margin: 0 0 6px; }
+
+/* Plain text only; it sits over the top of the open panel, never takes focus and goes away by itself. */
+.notify-cue {
+  position: absolute; top: 44px; left: 8px; right: 8px; z-index: 5; display: flex; align-items: center; gap: 8px;
+  background: #1f3d2c; color: #ecebff; border: 1px solid #4fae6a; border-left-width: 4px; border-radius: 8px; padding: 6px 8px; font-size: 12px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45); animation: notify-in 0.2s ease-out;
+}
+.notify-cue.bad { background: #4a2323; border-color: #c05a5a; }
+.notify-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.notify-show { flex: none; padding: 1px 10px; border-radius: 6px; font-size: 12px; }
+.notify-x { flex: none; background: none; border: none; color: inherit; font-size: 16px; line-height: 1; padding: 0 4px; cursor: pointer; opacity: 0.8; }
+.notify-x:hover { opacity: 1; }
+@keyframes notify-in { from { transform: translateY(-8px); opacity: 0; } to { transform: none; opacity: 1; } }
+/* --ink is light in the light theme, so the white bubble needs its own dark text (also for the notification bubble). */
+body.theme-light #bubble { color: #1a1a2e; border: 1px solid #d0d0d5; }
+body.theme-light .notify-cue { background: #e3f4e8; color: #1a1a2e; border-color: #2e7d46; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2); }
+body.theme-light .notify-cue.bad { background: #fde8e8; border-color: #b03a3a; }
+@media (prefers-reduced-motion: reduce) { .notify-cue { animation: none; } }

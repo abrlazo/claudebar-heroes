@@ -13,6 +13,7 @@ import { useAgents } from './hooks/useAgents';
 import { usePermissions } from './hooks/usePermissions';
 import { useGeneralChat } from './hooks/useGeneralChat';
 import { usePanel } from './hooks/usePanel';
+import { useNotifications } from './hooks/useNotifications';
 import { useWorkspaceActions } from './hooks/useWorkspaceActions';
 import { useClickThrough } from './hooks/useClickThrough';
 import { useWindowDrag } from './hooks/useWindowDrag';
@@ -122,6 +123,9 @@ function AppShell() {
   replayRef.current = run.replay;
   const ask = useGeneralChat();
   const panel = usePanel();
+  const notifications = useNotifications({
+    panel, wsId: ws?.id ?? null, agentId: agents.selectedId, agentIds: agents.agents.map((a) => a.id), say, selectAgent: agents.select,
+  });
 
   // busy blocks UI changes; projectBusy only blocks project chat send
   // `starting` covers the gap between a send and the run's first event.
@@ -348,6 +352,7 @@ function AppShell() {
         }}
         ask={{ chat: ask, model: askModel, onModelChange: setAskModel }}
         inventory={{ ws, busy, actions: workspaceActions, onPickMap: pickMap }}
+        notify={{ cue: notifications.cue, onShow: notifications.show, onDismiss: notifications.dismiss }}
       />
       <ArchiveDrawer
         open={panel.open && panel.drawerOpen}
