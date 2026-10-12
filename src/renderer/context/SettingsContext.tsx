@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from 'react';
 import { bar } from '../lib/bridge';
 import type { ArchivedAgent, ChatMessage, Settings, Workspace } from '../types';
+import { appendCapped } from '../lib/messages';
 
 /** Fields of a workspace the main process lets the renderer persist directly. */
 type ProgressPatch = Partial<Pick<Workspace, 'kills' | 'map'>>;
@@ -84,7 +85,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       bar.addAchievement(id, achId);
     },
     persistMessage: (wsId: string, message: ChatMessage) => {
-      mapWorkspace(wsId, (w) => ({ ...w, messages: [...(w.messages || []), message] }));
+      mapWorkspace(wsId, (w) => ({ ...w, messages: appendCapped(w.messages, message) }));
       bar.addMessage(wsId, message);
     },
     updateSettings: (patch: Partial<Settings>) => {
