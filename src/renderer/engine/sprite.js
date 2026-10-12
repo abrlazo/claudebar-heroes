@@ -374,20 +374,27 @@ function weapon(b, rect, hero, type, hand, angle, isBack, frame = {}) {
   }
 }
 
-function outline(b) {
-  const img = b.getImageData(0, 0, SPR_W, SPR_H);
-  const d = img.data;
-  const alpha = new Uint8Array(SPR_W * SPR_H);
-  for (let i = 0; i < alpha.length; i++) alpha[i] = d[i * 4 + 3];
-  for (let y = 0; y < SPR_H; y++) {
-    for (let x = 0; x < SPR_W; x++) {
-      const i = y * SPR_W + x;
-      if (alpha[i]) continue;
-      const near = (x > 0 && alpha[i - 1]) || (x < SPR_W - 1 && alpha[i + 1])
-        || (y > 0 && alpha[i - SPR_W]) || (y < SPR_H - 1 && alpha[i + SPR_W]);
-      if (near) d.set([...OUTLINE, 255], i * 4);
+const alphaBuf = new Uint8Array(SPR_W * SPR_H); // reused by every outline pass
+
+/** Adds a 1px outline around the opaque pixels of RGBA bytes `d` (w x h), in place. */
+export function outlineInto(d, w, h) {
+  const a = w * h === alphaBuf.length ? alphaBuf : new Uint8Array(w * h);
+  for (let i = 0; i < a.length; i++) a[i] = d[i * 4 + 3]; // snapshot first: new outline pixels are not neighbours
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (a[i]) continue;
+      if ((x > 0 && a[i - 1]) || (x < w - 1 && a[i + 1]) || (y > 0 && a[i - w]) || (y < h - 1 && a[i + w])) {
+        const o = i * 4;
+        d[o] = OUTLINE[0]; d[o + 1] = OUTLINE[1]; d[o + 2] = OUTLINE[2]; d[o + 3] = 255;
+      }
     }
   }
+}
+
+function outline(b) {
+  const img = b.getImageData(0, 0, SPR_W, SPR_H);
+  outlineInto(img.data, SPR_W, SPR_H);
   b.putImageData(img, 0, 0);
 }
 
@@ -425,20 +432,19 @@ export function createSprite(canvas) {
     return pose === 'run' || pose === 'attack' ? Math.min(1.5, Math.max(0.7, 100 / (hero?.stats.spd || 100))) : 1;
   }
 
-  function render() {
-    ctx.clearRect(0, 0, SPR_W, SPR_H);
-    if (!hero) return;
+  // Every frame of a pose is drawn, outlined and glow-blurred once (the getImageData and blur work), then cached by
+  // `pose:frame`. render() only composites cached canvases. The glow pulse is applied as one alpha on the pre-blurred
+  // halo (the old code applied it to each of five stacked passes): near-identical, not byte-identical.
+  const cache = new Map();
+
+  function build(frame) {
     b.clearRect(0, 0, SPR_W, SPR_H);
     wl.clearRect(0, 0, SPR_W, SPR_H);
-    drawHero(b, hero, POSES[pose].frames[frameIndex], glowColor ? wl : null);
+    drawHero(b, hero, frame, glowColor ? wl : null);
     outline(b);
-    if (hurtMs > 0) {
-      b.globalCompositeOperation = 'source-atop';
-      b.fillStyle = 'rgba(255, 70, 70, 0.65)';
-      b.fillRect(0, 0, SPR_W, SPR_H);
-      b.globalCompositeOperation = 'source-over';
-    }
-    cp.clearRect(0, 0, SPR_W, SPR_H);
+    const body = layer();
+    body.getContext('2d').drawImage(buffer, 0, 0);
+    const entry = { body, halo: null, tint: null, hurt: null };
     if (glowColor) {
       // Tint the weapon silhouette, blur it into a halo under the sprite, and wash the blade itself.
       tl.globalCompositeOperation = 'source-over';
@@ -448,20 +454,58 @@ export function createSprite(canvas) {
       tl.fillStyle = glowColor;
       tl.fillRect(0, 0, SPR_W, SPR_H);
       tl.globalCompositeOperation = 'source-over';
-      const pulse = 0.75 + 0.25 * Math.sin(glowPhase);
-      cp.save();
-      cp.filter = 'blur(2.6px)';
+      const tint = layer();
+      tint.getContext('2d').drawImage(tintLayer, 0, 0);
+      const halo = layer();
+      const hc = halo.getContext('2d');
+      hc.filter = 'blur(2.6px)';
+      for (let i = 0; i < 3; i++) hc.drawImage(tintLayer, 0, 0);
+      hc.filter = 'blur(1.1px)';
+      for (let i = 0; i < 2; i++) hc.drawImage(tintLayer, 0, 0);
+      entry.tint = tint;
+      entry.halo = halo;
+    }
+    return entry;
+  }
+
+  function entry() {
+    const key = `${pose}:${frameIndex}`;
+    let e = cache.get(key);
+    if (!e) {
+      e = build(POSES[pose].frames[frameIndex]);
+      cache.set(key, e);
+    }
+    return e;
+  }
+
+  function hurtOf(e) {
+    if (!e.hurt) {
+      e.hurt = layer();
+      const hc = e.hurt.getContext('2d');
+      hc.drawImage(e.body, 0, 0);
+      hc.globalCompositeOperation = 'source-atop';
+      hc.fillStyle = 'rgba(255, 70, 70, 0.65)';
+      hc.fillRect(0, 0, SPR_W, SPR_H);
+    }
+    return e.hurt;
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, SPR_W, SPR_H);
+    if (!hero) return;
+    cp.clearRect(0, 0, SPR_W, SPR_H);
+    const e = entry();
+    const pulse = 0.75 + 0.25 * Math.sin(glowPhase);
+    if (e.halo) {
       cp.globalAlpha = pulse;
-      for (let i = 0; i < 3; i++) cp.drawImage(tintLayer, 0, 0);
-      cp.filter = 'blur(1.1px)';
-      for (let i = 0; i < 2; i++) cp.drawImage(tintLayer, 0, 0);
-      cp.restore();
-      cp.drawImage(buffer, 0, 0);
-      cp.globalAlpha = 0.55 * pulse;
-      cp.drawImage(tintLayer, 0, 0);
+      cp.drawImage(e.halo, 0, 0);
       cp.globalAlpha = 1;
-    } else {
-      cp.drawImage(buffer, 0, 0);
+    }
+    cp.drawImage(hurtMs > 0 ? hurtOf(e) : e.body, 0, 0);
+    if (e.tint) {
+      cp.globalAlpha = 0.55 * pulse;
+      cp.drawImage(e.tint, 0, 0);
+      cp.globalAlpha = 1;
     }
     if (pose === 'sleep') {
       // Lie down: rotate 90° so the head points back and the body rests on the ground.
@@ -474,10 +518,12 @@ export function createSprite(canvas) {
   }
 
   return {
-    setHero(h) { hero = h; render(); },
+    setHero(h) { hero = h; cache.clear(); render(); },
     /** Weapon glow colour (CSS colour) or null for none. */
     setPrestige({ glow }) {
-      glowColor = glow || null;
+      const next = glow || null;
+      if (next !== glowColor) cache.clear();
+      glowColor = next;
       render();
     },
     get pose() { return pose; },
