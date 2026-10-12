@@ -44,7 +44,7 @@ Read `CLAUDE.md` first. It defines the layers and where each kind of change belo
 - Anything with listeners, timers or canvas work needs a cleanup (`game.destroy()`, effect cleanups).
 - Keep dark and light themes and the resizable panel working; check agents (tabs, orbs) if the finding touches them.
 - Update `CLAUDE.md` or `README.md` only when a change makes a statement in them untrue, and fix just that statement. Do not edit `.claude/agents/`.
-- Never run `git commit`, `git push`, `git reset`, `git checkout .` or anything that discards work (the one exception is deleting the review file, see below). Committing is gitama's job, on request.
+- Never run `git commit`, `git push`, `git reset`, `git checkout .` or anything that discards work (the one exception is deleting the review file, see below). Committing is version-controller's job, on request.
 
 ## 3. Verify
 
