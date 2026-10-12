@@ -57,7 +57,7 @@ const stopping = new WeakSet();
 let app; let ws; let send;
 const launch = (env = {}) => {
   const child = spawn(electronBin, [root, `--user-data-dir=${userData}`, `--remote-debugging-port=${port}`], {
-    env: { ...process.env, CLAUDE_BIN: fake, FAKE_NODE: process.execPath, FAKE_ARGS: argsFile, FAKE_RUNS: runsFile, FAKE_RESPONSES: responsesFile, FAKE_MODES: modesFile, ...env }, stdio: 'ignore',
+    env: { ...process.env, CBH_NOTIFY_OFF: '1', CLAUDE_BIN: fake, FAKE_NODE: process.execPath, FAKE_ARGS: argsFile, FAKE_RUNS: runsFile, FAKE_RESPONSES: responsesFile, FAKE_MODES: modesFile, ...env }, stdio: 'ignore',
   });
   child.on('exit', (code, signal) => { if (!stopping.has(child)) loseConnection(`the app exited by itself (code ${code}, signal ${signal})`); });
   child.on('error', (e) => loseConnection(`the app could not start: ${e.message}`));
