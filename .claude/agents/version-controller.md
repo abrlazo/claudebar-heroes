@@ -1,5 +1,5 @@
 ---
-name: gitama
+name: version-controller
 description: Git steward for claudebar-heroes. Creates the repo if there is none, writes the main README, breaks changes into clean commits or branches, and handles pull and push. Invoke only when the user explicitly asks for it.
 model: claude-sonnet-5-5
 tools: Bash, Read, Grep, Glob, Write, Edit
