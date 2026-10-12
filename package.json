@@ -10,9 +10,10 @@
     "dev": "vite build && electron . --dev",
     "watch": "vite build --watch",
     "typecheck": "tsc --noEmit",
-    "check": "node tools/check-roster.mjs && node tools/check-aura.mjs && node tools/check-archive.mjs && node tools/check-drawer.mjs && node tools/check-queue.mjs && node tools/check-permissions.mjs && node tools/check-pacing.mjs && node tools/check-sprite.mjs && node tools/check-messages.mjs && node tools/check-write-schedule.mjs && node tools/check-capped.mjs",
+    "check": "node tools/check-roster.mjs && node tools/check-aura.mjs && node tools/check-archive.mjs && node tools/check-drawer.mjs && node tools/check-queue.mjs && node tools/check-permissions.mjs && node tools/check-pacing.mjs && node tools/check-sprite.mjs && node tools/check-messages.mjs && node tools/check-write-schedule.mjs && node tools/check-capped.mjs && node tools/check-notify.mjs",
     "simulate": "vite build && node tools/simulate-agents.mjs && node tools/check-aura-ui.mjs",
-    "simulate:perm": "vite build && node tools/simulate-perm.mjs"
+    "simulate:perm": "vite build && node tools/simulate-perm.mjs",
+    "simulate:notify": "vite build && node tools/simulate-notify.mjs"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

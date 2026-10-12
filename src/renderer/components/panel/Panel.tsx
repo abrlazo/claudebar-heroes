@@ -2,6 +2,8 @@ import { PanelTabs } from './PanelTabs';
 import { ProjectChat } from './ProjectChat';
 import { AskChat } from './AskChat';
 import { Inventory } from './inventory/Inventory';
+import { NotifyCue } from '../common/NotifyCue';
+import type { NotifyCueProps } from '../common/NotifyCue';
 import type { InventoryProps } from './inventory/Inventory';
 import type { AskChatProps } from './AskChat';
 import type { ProjectChatProps } from './ProjectChat';
@@ -16,12 +18,13 @@ interface PanelProps {
   project: ProjectChatProps;
   ask: AskChatProps;
   inventory: InventoryProps;
+  notify: NotifyCueProps;
 }
 import { TABS } from '../../hooks/usePanel';
 import type { TabName } from '../../hooks/usePanel';
 
 /** The chat / inventory panel that opens from the strip. */
-export function Panel({ panel, dragProps, resizeProps, project, ask, inventory }: PanelProps) {
+export function Panel({ panel, dragProps, resizeProps, project, ask, inventory, notify }: PanelProps) {
   const visible = (name: TabName) => panel.open && panel.tab === name;
   return (
     <section id="panel" className={`interactive${panel.open ? '' : ' hidden'}`}>
@@ -29,6 +32,7 @@ export function Panel({ panel, dragProps, resizeProps, project, ask, inventory }
       <ProjectChat visible={visible(TABS.PROJECT)} {...project} />
       <AskChat visible={visible(TABS.ASK)} {...ask} />
       <Inventory visible={visible(TABS.INVENTORY)} {...inventory} />
+      <NotifyCue {...notify} />
       <div id="panel-resize" className="panel-resize" {...resizeProps} />
     </section>
   );

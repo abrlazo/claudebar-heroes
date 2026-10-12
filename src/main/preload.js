@@ -61,4 +61,8 @@ contextBridge.exposeInMainWorld('bar', {
   onPanelSide: (cb) => subscribe('panel:side', cb),
   onDrawerMode: (cb) => subscribe('panel:drawerMode', cb),
   addMessage: (wsId, message) => ipcRenderer.send('chat:addMessage', { wsId, message }),
+  setNotifyView: (view) => ipcRenderer.send('notify:view', view),
+  testNotify: () => ipcRenderer.invoke('notify:test'),
+  onNotify: (cb) => subscribe('notify:show', cb),
+  onNotifyOpen: (cb) => subscribe('notify:open', cb),
 });

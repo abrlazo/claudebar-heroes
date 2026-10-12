@@ -214,7 +214,7 @@ const loseConnection = (why) => {
 const stopping = new WeakSet(); // children and sockets we ended on purpose
 const launch = (dir, env = {}) => {
   const child = spawn(electronBin, [root, `--user-data-dir=${dir}`, `--remote-debugging-port=${port}`], {
-    env: { ...process.env, CLAUDE_BIN: fake, FAKE_NODE: process.execPath, FAKE_COUNT: path.join(work, 'design-count.txt'), FAKE_RUNS: path.join(work, 'runs.txt'), ...env }, stdio: 'ignore',
+    env: { ...process.env, CBH_NOTIFY_OFF: '1', CLAUDE_BIN: fake, FAKE_NODE: process.execPath, FAKE_COUNT: path.join(work, 'design-count.txt'), FAKE_RUNS: path.join(work, 'runs.txt'), ...env }, stdio: 'ignore',
   });
   child.on('exit', (code, signal) => { if (!stopping.has(child)) loseConnection(`the app exited by itself (code ${code}, signal ${signal})`); });
   child.on('error', (e) => loseConnection(`the app could not start: ${e.message}`));

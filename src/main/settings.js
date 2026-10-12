@@ -6,6 +6,7 @@ const { app } = require('electron');
 const { designFor, rememberDesign } = require('./hero-design');
 const { MAX_ARCHIVED, cleanArchived, cleanArchive } = require('./archive');
 const { nextDelay } = require('./write-schedule');
+const { coerceFlag } = require('./notify');
 
 const DEFAULTS = {
   permissionMode: 'default',
@@ -14,6 +15,8 @@ const DEFAULTS = {
   activeId: null,
   theme: 'dark',
   panelHeight: 500,
+  notifyDone: true, // desktop notification / cue when work finishes (booleans only, see notify.js)
+  notifyFail: true, // ... and when something fails
   migrations: {}, // one-time data migrations already applied (main only, never set by the renderer)
   summonDesigns: {}, // validated hero designs by summoned name (lower case), see hero-design.js
 };
@@ -89,6 +92,8 @@ function load() {
     raw = JSON.parse(fs.readFileSync(file(), 'utf8'));
   } catch {}
   const s = { ...DEFAULTS, ...raw };
+  s.notifyDone = coerceFlag(raw.notifyDone);
+  s.notifyFail = coerceFlag(raw.notifyFail);
 
   // Older settings had a single working folder; turn it into a workspace
   // (unless it was just the home-folder default).
@@ -157,6 +162,13 @@ function debounceWrite() {
   }, nextDelay(firstDirtyAt, Date.now()));
 }
 
+// main.js turns a failed write into a notification (it passes no text from here and never throws back at us).
+let writeErrorHandler = null;
+function onWriteError(fn) { writeErrorHandler = typeof fn === 'function' ? fn : null; }
+function reportWriteError(err) {
+  try { writeErrorHandler?.(err); } catch { /* a notification problem must not break saving */ }
+}
+
 // One async write at a time; a flushSync bumps syncGen so an older snapshot never replaces a newer sync write.
 let writing = false;
 let again = false;
@@ -174,6 +186,7 @@ async function flushAsync() {
     else await fs.promises.rename(tmp, file());
   } catch (err) {
     console.error('Failed to write settings:', err);
+    reportWriteError(err);
   } finally {
     writing = false;
     if (again) { again = false; flushAsync(); }
@@ -190,6 +203,7 @@ function flushSync() {
     fs.writeFileSync(file(), JSON.stringify(current));
   } catch (err) {
     console.error('Failed to flush settings:', err);
+    reportWriteError(err);
   }
 }
 
@@ -360,5 +374,5 @@ function clearArchive(wsId) {
 module.exports = {
   archiveAgent, deleteArchived, clearArchive,
   get, set, active, updateWorkspace, addTrophy, addAchievement, addStats, markMigration, addUsage, importWorkspace, selectWorkspace, removeWorkspace, rerollHero, applyDesign,
-  newAgent, updateAgent, addAgent, removeAgent, addMessage, flushSync,
+  newAgent, updateAgent, addAgent, removeAgent, addMessage, flushSync, onWriteError,
 };
