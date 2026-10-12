@@ -39,6 +39,25 @@ check('negative, NaN, infinite and huge numbers are cleaned', (() => {
   const r = cleanArchived(base({ startedAt: -5, endedAt: NaN, usage: { input: -1, output: Infinity, cacheRead: 1e30, cacheCreate: '5' } }));
   return r.startedAt === 0 && r.endedAt === null && r.usage.input === 0 && r.usage.output === 0 && r.usage.cacheRead === 1e12 && r.usage.cacheCreate === 0;
 })());
+check('real timestamps survive (not clamped to the token cap)', (() => {
+  const now = Date.now();
+  const r = cleanArchived(base({ startedAt: now - 60000, endedAt: now, archivedAt: now + 5 }));
+  return r.startedAt === now - 60000 && r.endedAt === now && r.archivedAt === now + 5;
+})());
+check('times written by the old clamp (1e12) read as unknown, not as 2001', (() => {
+  const r = cleanArchived(base({ startedAt: 1e12, endedAt: 1e12, archivedAt: 1e12 }));
+  return r.startedAt === 0 && r.endedAt === null && r.archivedAt === 0;
+})());
+check('a hostile time is bounded to a valid Date', (() => {
+  const r = cleanArchived(base({ startedAt: 1e30, endedAt: Infinity, archivedAt: -1 }));
+  return r.startedAt === 8.64e15 && Number.isFinite(new Date(r.startedAt).getTime()) && r.endedAt === null && r.archivedAt === 0;
+})());
+check('times stay different across a second clean (what load() does)', (() => {
+  const now = Date.now();
+  const once = cleanArchive([base({ id: 'a', startedAt: now - 9000, archivedAt: now - 8000 }), base({ id: 'b', startedAt: now - 5000, archivedAt: now - 4000 })]);
+  const twice = cleanArchive(once);
+  return twice.length === 2 && twice[0].startedAt !== twice[1].startedAt && twice[0].startedAt === now - 9000;
+})());
 check('names and task are clamped (40 / 60 / 500)', (() => {
   const r = cleanArchived(base({ name: 'n'.repeat(99), definition: 'd'.repeat(99), task: 't'.repeat(900), sessionId: 's'.repeat(500) }));
   return r.name.length === 40 && r.definition.length === 60 && r.task.length === 500 && r.sessionId.length === 100;
