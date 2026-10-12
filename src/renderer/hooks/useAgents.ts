@@ -4,10 +4,11 @@ import { useBridgeEvent } from './useBridgeEvent';
 import { generateHero } from '../engine/heroes.js';
 import { MAX_AGENTS, REVIEW_AGENT, handoffTask, idleLimitMs, uniqueAgentName } from '../lib/agents';
 import { dueAgents, nextDeadline } from '../lib/idle';
+import { modeChangeLine } from '../lib/permissions';
 import type { AgentInvocation } from '../lib/agents';
 import type { GameApi } from './useGameEngine';
 import type { PermissionsApi } from './usePermissions';
-import type { AgentDefinition, AgentEvent, ArchivedAgent, ChatMessage, ClaudeEvent, Hero, PermissionMode, Usage, Workspace } from '../types';
+import type { AgentDefinition, AgentEvent, ArchivedAgent, ChatMessage, ClaudeEvent, Hero, Usage, Workspace } from '../types';
 
 const DEATH_ANIMATION_MS = 600;
 
@@ -20,7 +21,6 @@ export interface ChainSpec {
 /** Steps still waiting behind a running agent ("/a x && /b"). Not persisted. */
 interface Chain extends ChainSpec {
   ws: Workspace;
-  permissionMode: PermissionMode;
 }
 
 /** Claude's delegation to one of the project's agents, as the Expedition run reports it. */
@@ -96,9 +96,9 @@ export interface AgentsApi {
    * Starts `definition` on `task` in its own tab and orb. Rejects with an Error if it could not start.
    * `chain` = the steps to start, one after another, as each agent finishes successfully.
    */
-  spawn: (ws: Workspace, definition: AgentDefinition, task: string, permissionMode: PermissionMode, chain?: ChainSpec) => Promise<void>;
+  spawn: (ws: Workspace, definition: AgentDefinition, task: string, chain?: ChainSpec) => Promise<void>;
   /** Sends a follow-up message to a finished agent by resuming its session. */
-  message: (ws: Workspace, agentId: string, prompt: string, permissionMode: PermissionMode) => void;
+  message: (ws: Workspace, agentId: string, prompt: string) => void;
   /** Cancels one running agent. */
   stop: (wsId: string, agentId: string) => void;
   stopAll: (wsId: string) => void;
@@ -166,6 +166,20 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
     commit(agentsRef.current.map((a) => (a.id === id ? fn(a) : a)));
   }, [commit]);
 
+  // Streamed text: the ref (the truth that hand-offs and the archive read) changes at once, the render is
+  // published at most once per animation frame. Any other commit publishes the latest ref anyway.
+  const streamFrame = useRef(0);
+  const updateStreamed = useCallback((id: string, fn: (a: Agent) => Agent) => {
+    agentsRef.current = agentsRef.current.map((a) => (a.id === id ? fn(a) : a));
+    if (!streamFrame.current) {
+      streamFrame.current = requestAnimationFrame(() => {
+        streamFrame.current = 0;
+        setAgents(agentsRef.current);
+      });
+    }
+  }, []);
+  useEffect(() => () => { if (streamFrame.current) cancelAnimationFrame(streamFrame.current); }, []);
+
   const select = useCallback((id: string | null) => {
     const prev = selectedRef.current;
     selectedRef.current = id;
@@ -222,7 +236,7 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
         return;
       }
       try {
-        await spawnRef.current?.(chain.ws, step.definition, next.task, chain.permissionMode, { rest, total: chain.total });
+        await spawnRef.current?.(chain.ws, step.definition, next.task, { rest, total: chain.total });
         notifyRef.current(chain.ws.id, `Chain: ${step.definition.name} started (step ${chain.total - rest.length} of ${chain.total}).`);
       } catch (err) {
         dropped(`${step.definition.name} could not start (${(err as Error).message})`);
@@ -278,7 +292,7 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
         });
         break;
       case 'text':
-        update(agentId, (a) => touch(withText(a, ev.text ?? '')));
+        updateStreamed(agentId, (a) => touch(withText(a, ev.text ?? '')));
         break;
       case 'tool':
         update(agentId, (a) => touch({ ...a, log: [...a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }] }));
@@ -290,9 +304,12 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
         permissions.add({ kind: 'agent', agentId }, ev);
         say('Needs your OK!', 3000);
         break;
+      case 'permission-mode':
+        update(agentId, (a) => ({ ...a, lastActivityAt: Date.now(), log: [...a.log, { kind: 'meta', text: modeChangeLine(ev.mode, ev.ok === true) }] }));
+        break;
       case 'permission-resolved':
         update(agentId, touch);
-        if (ev.requestId) permissions.resolve(ev.requestId, ev.how ?? 'ended');
+        if (ev.requestId) permissions.resolve(ev.requestId, ev.how ?? 'ended', ev.reply);
         break;
       case 'error':
         failed.current.add(agentId);
@@ -316,19 +333,19 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
       default:
         break;
     }
-  }, [complete, game, permissions, say, update]);
+  }, [complete, game, permissions, say, update, updateStreamed]);
 
   useBridgeEvent<AgentEvent>(bar.onAgentEvent, handleEvent);
 
-  const spawn = useCallback(async (ws: Workspace, definition: AgentDefinition, task: string, permissionMode: PermissionMode, chain?: ChainSpec) => {
+  const spawn = useCallback(async (ws: Workspace, definition: AgentDefinition, task: string, chain?: ChainSpec) => {
     spawningRef.current += 1;
     setSpawning((n) => n + 1);
     try {
       const displayName = uniqueAgentName(definition.name, agentsRef.current.map((a) => a.name));
-      const result = await bar.runAgent(ws.id, definition.name, displayName, task, permissionMode);
+      const result = await bar.runAgent(ws.id, definition.name, displayName, task);
       if (!result.agent) throw new Error(result.error || 'the agent could not start');
       const record = result.agent;
-      if (chain?.rest.length) chains.current.set(record.id, { ws, rest: chain.rest, total: chain.total, permissionMode });
+      if (chain?.rest.length) chains.current.set(record.id, { ws, rest: chain.rest, total: chain.total });
       const index = created.current;
       created.current += 1;
       const now = Date.now();
@@ -359,7 +376,7 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
 
   spawnRef.current = spawn;
 
-  const message = useCallback((ws: Workspace, agentId: string, prompt: string, permissionMode: PermissionMode) => {
+  const message = useCallback((ws: Workspace, agentId: string, prompt: string) => {
     const agent = agentsRef.current.find((a) => a.id === agentId);
     if (!agent || agent.status === 'running' || agent.observed) return; // observed agents have no process to resume
     if (!agent.sessionId) {
@@ -369,7 +386,7 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
     stopped.current.delete(agentId);
     update(agentId, (a) => ({ ...a, status: 'running', outcome: undefined, endedAt: undefined, lastActivityAt: Date.now(), log: [...a.log, { kind: 'user', text: prompt }] }));
     game.wake();
-    bar.messageAgent(ws.id, agentId, agent.sessionId, agent.definition, prompt, ws.path, permissionMode);
+    bar.messageAgent(ws.id, agentId, agent.sessionId, agent.definition, prompt, ws.path);
   }, [game, update]);
 
   const logMeta = useCallback((agentId: string, text: string) => {
@@ -418,9 +435,9 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
       update(agentId, (a) => ({ ...a, lastActivityAt: Date.now(), log: [...a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }] }));
       game.toolEnemy(ev.name ?? '');
     } else if (ev.phase === 'event' && ev.inner === 'text' && ev.text) {
-      update(agentId, (a) => ({ ...withText(a, ev.text ?? ''), lastActivityAt: Date.now() }));
+      updateStreamed(agentId, (a) => ({ ...withText(a, ev.text ?? ''), lastActivityAt: Date.now() }));
     }
-  }, [finishObserved, game, update]);
+  }, [finishObserved, game, update, updateStreamed]);
 
   /** Shows a delegation as an agent only if its type is one of the project's own definitions (same gate as "/<agent>"). */
   const beginObserved = useCallback(async (d: Delegation, ev: ClaudeEvent) => {
