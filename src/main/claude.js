@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const permissions = require('./permissions');
+const { createCapped } = require('./capped-text');
 
 const isWin = process.platform === 'win32';
 
@@ -46,10 +47,22 @@ function resolveClaudeBinary() {
 
 // "Ask me each time": Claude asks the app before a risky tool runs. Verified with Claude Code 2.1.292:
 // stream-json on stdin plus `--permission-prompt-tool stdio` makes Claude send `control_request` (`can_use_tool`)
-// lines and wait for a `control_response`. The flag is hidden from `--help`; the other modes never use it.
-const HOST_ARGS = ['--input-format', 'stream-json', '--permission-prompt-tool', 'stdio'];
-const HOST_UNSUPPORTED_HINT = ' This Claude version cannot ask for permission through the app: pick Accept edits or Bypass perms in the footer, or update Claude Code.';
+// lines and wait for a `control_response`. The flag is hidden from `--help`. Every PROJECT process (the Expedition run and
+// the /<agent> processes) starts this way whatever the footer mode is, so the footer can be applied to a run that is already
+// going: `set_permission_mode` on stdin (see `setPermissionMode`). `--allow-dangerously-skip-permissions` only makes Bypass
+// reachable later; the run still starts in its own mode. The Ask general chat and the hero-design `ask()` stay plain.
+const HOST_ARGS = ['--input-format', 'stream-json', '--permission-prompt-tool', 'stdio', '--allow-dangerously-skip-permissions'];
+const HOST_UNSUPPORTED_HINT = ' This Claude version cannot ask for permission through the app: update Claude Code. The other permission modes keep working after this message.';
 const DEFAULT_PERMISSION_TIMEOUT_MS = 5 * 60 * 1000;
+const MODE_ACK_TIMEOUT_MS = 5000;
+const MODE_LABELS = { default: 'Ask me each time', acceptEdits: 'Accept edits', plan: 'Plan only', bypassPermissions: 'Bypass perms' };
+
+// Set when a host start was rejected by the CLI ("unknown option" before any session): from then on, for this app session,
+// project runs in a mode other than "Ask me each time" go back to the plain argv (no live mode switch for those).
+let hostSupportedFlag = true;
+const hostSupported = () => hostSupportedFlag;
+/** 'host' for a project process, unless this Claude cannot do it and the mode does not need asking. */
+const projectPromptMode = (permissionMode) => (hostSupportedFlag || permissionMode === 'default' ? 'host' : 'plain');
 
 // An unanswered request is denied after this long. CBH_PERMISSION_TIMEOUT_MS is a test seam: read here, in the
 // main process only (never from settings or the renderer); values below 500 are ignored.
@@ -70,12 +83,17 @@ function permissionTimeoutMs() {
  */
 function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode = 'plain' }, emit) {
   const host = promptMode === 'host';
+  // The mode the process really enforces: what it started with, then what Claude confirmed (set_permission_mode).
+  let mode = permissions.isMode(permissionMode) ? permissionMode : 'default';
+  let requestedMode = mode; // the last mode asked for, confirmed or not
+  const modeRequests = new Map(); // request id -> { next, timer }
+  let modeCounter = 0;
   const args = [
     '-p',
     '--output-format', 'stream-json',
     '--verbose',
     '--include-partial-messages',
-    '--permission-mode', permissionMode || 'default',
+    '--permission-mode', mode,
   ];
   if (sessionId) args.push('--resume', sessionId);
   if (model) args.push('--model', model);
@@ -100,7 +118,8 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode 
     if (!stdin || stdin.destroyed || !stdin.writable) return false;
     try { stdin.write(line); return true; } catch { return false; }
   };
-  const endInput = () => { try { if (child?.stdin && !child.stdin.destroyed) child.stdin.end(); } catch { /* already closed */ } };
+  let inputClosed = false;
+  const endInput = () => { inputClosed = true; try { if (child?.stdin && !child.stdin.destroyed) child.stdin.end(); } catch { /* already closed */ } };
   // Anything still pending when the process is over can never be answered.
   const dropPending = () => {
     if (!broker) return;
@@ -111,8 +130,38 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode 
   const finish = (code) => {
     if (!handle.running) return;
     handle.running = false;
+    for (const r of modeRequests.values()) clearTimeout(r.timer);
+    modeRequests.clear();
     dropPending();
     emit({ type: 'end', code });
+  };
+  // A switch that did not happen. Tell the renderer; if it was a tightening switch, stop the run (fail closed).
+  const failMode = (next, errorCode) => {
+    requestedMode = mode;
+    if (!handle.running) return;
+    emit({ type: 'permission-mode', mode: next, ok: false, errorCode });
+    if (permissions.isTightening(mode, next)) {
+      emit({ type: 'error', message: `Could not apply ${MODE_LABELS[next] || next} to the running Claude, so the run was stopped. Send your message again.` });
+      handle.cancel();
+    }
+  };
+  // Claude confirmed (or refused) one of our set_permission_mode requests.
+  const onModeResponse = (res) => {
+    const pending = modeRequests.get(res.requestId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    modeRequests.delete(res.requestId);
+    if (!res.ok) { failMode(pending.next, res.errorCode || 'refused'); return; }
+    mode = pending.next;
+    requestedMode = modeRequests.size ? requestedMode : mode;
+    emit({ type: 'permission-mode', mode, ok: true });
+    // Bypass means "stop asking": what is already waiting is allowed with main's stored input. Other switches leave the cards.
+    if (mode === 'bypassPermissions') {
+      for (const done of broker.resolveAll('allow', 'mode')) {
+        const wrote = writeLine(permissions.buildControlResponse(done.requestId, done.response));
+        emit({ type: 'permission-resolved', requestId: done.requestId, how: wrote ? 'auto-allowed' : 'ended' });
+      }
+    }
   };
   const handle = {
     running: true,
@@ -123,15 +172,43 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode 
       else child.kill('SIGINT');
       if (host) endInput();
     },
-    /** The user's answer to a pending request. False when it is not pending in THIS run (unknown, repeated, forged). */
-    answerPermission(requestId, decision) {
+    /**
+     * The user's answer to a pending request. `reply` (text) is only valid with 'deny'. False when it is not pending in THIS
+     * run (unknown, repeated, forged) or the answer is not valid.
+     */
+    answerPermission(requestId, decision, reply) {
       if (!broker || !handle.running) return false;
-      const answer = broker.answer(requestId, decision);
+      const answer = broker.answer(requestId, decision, reply);
       if (!answer.ok) return false;
       const wrote = writeLine(permissions.buildControlResponse(requestId, answer.response));
-      emit({ type: 'permission-resolved', requestId, how: !wrote ? 'ended' : decision === 'allow' ? 'allowed' : 'denied' });
+      const how = !wrote ? 'ended' : answer.reply ? 'replied' : decision === 'allow' ? 'allowed' : 'denied';
+      emit({ type: 'permission-resolved', requestId, how, ...(wrote && answer.reply ? { reply: answer.reply } : {}) });
       return wrote;
     },
+    /**
+     * Applies a new footer mode to this running process (main is the only caller, with a mode from the allowlist).
+     * Policy (`mode`) only changes when Claude confirms. Answers with a `permission-mode` event: `ok: true` once confirmed,
+     * `ok: false` when it failed (error, 5 s without an answer, or a process that cannot switch); a failed TIGHTENING switch
+     * also stops the run, because it would otherwise keep more freedom than the footer shows.
+     */
+    setPermissionMode(next) {
+      // A run whose input is closed (its result is in, or it was stopped) is over: nothing to switch, nothing to report.
+      if (!handle.running || inputClosed || !permissions.isMode(next) || next === requestedMode) return { ok: false };
+      const id = `cbh-mode-${++modeCounter}`;
+      const line = host ? permissions.buildSetModeLine(id, next) : null;
+      if (!line || !writeLine(line)) {
+        failMode(next, 'not_supported');
+        return { ok: true };
+      }
+      requestedMode = next;
+      const timer = setTimeout(() => {
+        if (modeRequests.delete(id)) failMode(next, 'timeout');
+      }, MODE_ACK_TIMEOUT_MS);
+      if (timer.unref) timer.unref();
+      modeRequests.set(id, { next, timer });
+      return { ok: true };
+    },
+    mode: () => mode,
     pendingPermissions() {
       return broker ? broker.pending() : [];
     },
@@ -162,7 +239,7 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode 
   else child.stdin.end(prompt);
 
   let buffer = '';
-  let stderr = '';
+  const stderr = createCapped();
   const state = { streamedText: false, subagents: new Map() };
   let sawSession = false;
 
@@ -176,7 +253,9 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode 
       try {
         const msg = JSON.parse(line);
         if (msg.type === 'system' && msg.subtype === 'init') sawSession = true;
-        if (host && (msg.type === 'control_request' || msg.type === 'control_cancel_request')) handleControl(msg, { broker, emit, writeLine });
+        const modeAck = host && msg.type === 'control_response' ? permissions.parseModeResponse(msg) : null;
+        if (modeAck) onModeResponse(modeAck);
+        else if (host && (msg.type === 'control_request' || msg.type === 'control_cancel_request')) handleControl(msg, { broker, emit, writeLine, getMode: () => mode });
         else handleMessage(msg, emit, state);
         if (host && msg.type === 'result') { dropPending(); endInput(); }
       } catch {
@@ -186,7 +265,7 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode 
   });
 
   child.stderr.on('data', (chunk) => {
-    stderr += chunk.toString();
+    stderr.add(chunk.toString());
   });
 
   child.on('error', (err) => {
@@ -199,10 +278,12 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode 
   });
 
   child.on('close', (code) => {
-    if (code !== 0 && stderr.trim() && handle.running) {
+    const err = stderr.text();
+    if (code !== 0 && err.trim() && handle.running) {
       // A Claude that does not know the host flags says so before it starts any session.
-      const unsupported = host && !sawSession && /unknown option|invalid.*--permission|--permission-prompt-tool/i.test(stderr);
-      emit({ type: 'error', message: stderr.trim() + (unsupported ? HOST_UNSUPPORTED_HINT : '') });
+      const unsupported = host && !sawSession && /unknown option|invalid.*--permission|--permission-prompt-tool/i.test(err);
+      if (unsupported) hostSupportedFlag = false;
+      emit({ type: 'error', message: err.trim() + (unsupported ? HOST_UNSUPPORTED_HINT : '') });
     }
     finish(code);
   });
@@ -212,9 +293,10 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode 
 
 /**
  * Claude's `control_request` lines in host mode. `can_use_tool` becomes a 'permission' event (or is answered at once
- * for tools that need a conversation the app cannot show); anything else is answered "unsupported" so Claude never waits.
+ * for tools that need a conversation the app cannot show; or by the mode's policy: Bypass allows, Accept edits and Plan deny,
+ * with no card); anything else is answered "unsupported" so Claude never waits.
  */
-function handleControl(msg, { broker, emit, writeLine }) {
+function handleControl(msg, { broker, emit, writeLine, getMode }) {
   if (msg.type === 'control_cancel_request') {
     const gone = broker.cancel(msg.request_id);
     if (gone.ok) emit({ type: 'permission-resolved', requestId: msg.request_id, how: 'cancelled' });
@@ -232,7 +314,13 @@ function handleControl(msg, { broker, emit, writeLine }) {
     return;
   }
   const added = broker.add(msg);
-  if (added.ok) emit({ type: 'permission', ...added.view });
+  if (added.ok) {
+    const policy = permissions.policyForMode(getMode());
+    if (policy === 'ask') { emit({ type: 'permission', ...added.view }); return; }
+    // The mode answers for the user (no card); allow uses main's stored input.
+    const done = broker.autoAnswer(requestId, policy, 'mode');
+    if (done.ok) writeLine(permissions.buildControlResponse(requestId, done.response));
+  }
   else if (added.reason === 'full') writeLine(permissions.buildControlResponse(requestId, broker.denial('full')));
 }
 
@@ -494,4 +582,4 @@ function ask({ prompt, cwd, model, timeoutMs = 25000 }) {
   });
 }
 
-module.exports = { run, resolveClaudeBinary, listCommands, ask };
+module.exports = { run, resolveClaudeBinary, listCommands, ask, hostSupported, projectPromptMode };

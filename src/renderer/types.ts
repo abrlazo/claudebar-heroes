@@ -145,7 +145,7 @@ export interface Background {
 // ----- Events streamed from the main process -----
 
 export interface ClaudeEvent {
-  type: 'start' | 'session' | 'turn' | 'usage' | 'thinking' | 'text' | 'tool' | 'subagent' | 'result' | 'error' | 'end' | 'permission' | 'permission-resolved';
+  type: 'start' | 'session' | 'turn' | 'usage' | 'thinking' | 'text' | 'tool' | 'subagent' | 'result' | 'error' | 'end' | 'permission' | 'permission-resolved' | 'permission-mode';
   wsId?: string;
   sessionId?: string;
   text?: string;
@@ -187,7 +187,16 @@ export interface ClaudeEvent {
   path?: string;
   viaSubagent?: boolean;
   expiresAt?: number;
-  how?: 'allowed' | 'denied' | 'timeout' | 'cancelled' | 'stopped' | 'ended';
+  how?: 'allowed' | 'denied' | 'timeout' | 'cancelled' | 'stopped' | 'ended' | 'replied' | 'auto-allowed';
+  /** 'permission-resolved' with how 'replied': the user's reply, already cleaned and capped by main. */
+  reply?: string;
+  /**
+   * 'permission-mode' = the footer mode was applied to this running process: `mode` is the mode asked for, `ok` whether
+   * Claude confirmed it (`errorCode` says why not). A failed switch to a stricter mode also stops the run (an 'error' event).
+   */
+  mode?: PermissionMode;
+  ok?: boolean;
+  errorCode?: string;
 }
 
 /** Whose process asked: the project chat (Quest) of a workspace, or one /<agent> process. */
@@ -263,11 +272,10 @@ export interface Bar {
   agentDefinitions(wsId: string): Promise<AgentDefinition[]>;
   /** Runs one agent in its own process; `error` is set when it could not start. */
   runAgent(
-    wsId: string, definitionName: string, displayName: string, task: string, permissionMode: PermissionMode,
+    wsId: string, definitionName: string, displayName: string, task: string,
   ): Promise<{ agent?: AgentRecord; definitionName?: string; error?: string }>;
   messageAgent(
     wsId: string, agentId: string, sessionId: string, definitionName: string, prompt: string, cwd: string,
-    permissionMode: PermissionMode,
   ): void;
   /** Whether the project has .claude/review.md (the path comes from the workspace). */
   projectHasReview(wsId: string): Promise<boolean>;
@@ -275,8 +283,9 @@ export interface Bar {
   /**
    * Answers a pending permission request of the project chat (`target` 'quest', agentId null) or of one agent.
    * Main accepts it only for a request it recorded as pending and answers from its own stored copy of the tool input.
+   * `message` (a reply) is only valid with 'deny'; main cleans and caps it.
    */
-  answerPermission(target: 'quest' | 'agent', agentId: string | null, requestId: string, decision: 'allow' | 'deny'): Promise<{ ok: boolean }>;
+  answerPermission(target: 'quest' | 'agent', agentId: string | null, requestId: string, decision: 'allow' | 'deny', message?: string): Promise<{ ok: boolean }>;
   listAgents(wsId: string): Promise<AgentRecord[]>;
   /** Stores a retired / closed agent's chat in the project's archive (main clamps it; null = refused). */
   archiveAgent(wsId: string, record: Omit<ArchivedAgent, 'archivedAt'>): Promise<{ archive: ArchivedAgent[] } | null>;

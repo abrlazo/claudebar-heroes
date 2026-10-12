@@ -36,8 +36,25 @@ if [ "$stream_in" = "1" ]; then
     printf '%s\\n' '{"type":"control_response","response":{"subtype":"success","request_id":"cmd-list","response":{"commands":[{"name":"compact","description":"Free up context by summarizing the conversation so far","argumentHint":"<optional custom summarization instructions>"},{"name":"context","description":"Show current context usage","argumentHint":""},{"name":"model","description":"Set the AI model for Claude Code","argumentHint":"<model>"},{"name":"doctor","description":"Diagnose the setup","argumentHint":""},{"name":"__remote-workflow","description":"Internal","argumentHint":""},{"name":"deploy","description":"A real skill","argumentHint":""},{"name":"ship","description":"A custom command","argumentHint":"<env>"},{"name":"git:sync","description":"A namespaced command","argumentHint":""},{"name":"docx","description":"Word documents (claude.ai sync)","argumentHint":""}]}}}'
     exit 0
   fi
-  # "Ask me each time" runs (permission mode default) send the prompt as ONE stream-json user line and keep stdin open
-  # for permission answers; pull the text out of it so every phase below works unchanged.
+  # Every project run sends the prompt as ONE stream-json user line and keeps stdin open (permission answers, and
+  # \`set_permission_mode\` when the footer changes mid-run). Answer the mode switches from a background reader that
+  # stops at EOF or when this script is gone; pull the prompt text out of the first line so every phase below works unchanged.
+  main_pid=$$
+  (
+    while true; do
+      if IFS= read -r -t 1 l; then
+        if [[ "$l" == *set_permission_mode* ]]; then
+          rid=$(printf '%s' "$l" | sed -E 's/.*"request_id":"([^"]*)".*/\\1/')
+          rmode=$(printf '%s' "$l" | sed -E 's/.*"mode":"([^"]*)".*/\\1/')
+          printf '%s\\n' "{\\"type\\":\\"control_response\\",\\"response\\":{\\"subtype\\":\\"success\\",\\"request_id\\":\\"$rid\\",\\"response\\":{\\"mode\\":\\"$rmode\\"}}}"
+        fi
+      elif [ $? -le 128 ]; then break
+      fi
+      kill -0 $main_pid 2>/dev/null || break
+    done
+  ) <&0 &
+  reader_pid=$!
+  trap 'kill $reader_pid 2>/dev/null' EXIT
   prompt=$(printf '%s' "$request" | "$FAKE_NODE" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).message.content[0].text)}catch{}})')
 else
   prompt=$(cat)

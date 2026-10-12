@@ -232,7 +232,7 @@ function AppShell() {
     }
     say(`Summoning ${definition.name}…`, 2000);
     try {
-      await agents.spawn(target, definition, task, settings.permissionMode, rest.length ? { rest, total: rest.length + 1 } : undefined);
+      await agents.spawn(target, definition, task, rest.length ? { rest, total: rest.length + 1 } : undefined);
       ach.noteAgent();
       persistMessage(target.id, { kind: 'meta', text: rest.length
         ? `Chain: ${[definition, ...rest.map((s) => s.definition)].map((d) => d.name).join(' -> ')}. ${definition.name} is working in its own tab.`
@@ -249,7 +249,6 @@ function AppShell() {
   const sendProjectPrompt = async (typed: string) => {
     if (!ws) return;
     let text = typed;
-    let permissionMode = settings.permissionMode;
     // "summon <character>" swaps the hero and is never sent to Claude.
     const summon = findSummon(text);
     if (summon) {
@@ -292,7 +291,6 @@ function AppShell() {
           updateSettings({ permissionMode: 'plan' });
           persistMessage(ws.id, { kind: 'meta', text: 'Plan mode is on and stays on (it is saved): Claude plans and changes nothing. Switch the permission dropdown to leave it.' });
         }
-        permissionMode = 'plan';
         if (!task) {
           persistMessage(ws.id, { kind: 'user', text });
           return;
@@ -303,7 +301,7 @@ function AppShell() {
     // With an agent's tab open, the message goes to that agent and the view stays on it.
     const agent = agents.agents.find((a) => a.id === selectedAgentRef.current);
     if (agent) {
-      agents.message(ws, agent.id, text, permissionMode);
+      agents.message(ws, agent.id, text);
       return;
     }
     if (mustQueue(ws.id)) {

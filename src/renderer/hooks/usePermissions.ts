@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { bar } from '../lib/bridge';
-import { addRequest, clearOwner as dropOwner, resolveRequest } from '../lib/permissions';
+import { addRequest, clearOwner as dropOwner, replyLine, resolveRequest } from '../lib/permissions';
 import type { ClaudeEvent, PermissionOwner, PermissionRequest } from '../types';
 
 type How = NonNullable<ClaudeEvent['how']>;
@@ -11,11 +11,11 @@ export interface PermissionsApi {
   /** A 'permission' event of Claude's run or of an agent's process: shows a card. */
   add: (owner: PermissionOwner, ev: ClaudeEvent) => void;
   /** A 'permission-resolved' event (or the user's own answer): removes the card and logs what happened once. */
-  resolve: (requestId: string, how: How) => void;
+  resolve: (requestId: string, how: How, reply?: string) => void;
   /** The process of `owner` is over: its cards can never be answered. */
   clearOwner: (owner: PermissionOwner) => void;
   /** The user's choice. The card goes away when main confirms; main only accepts requests it recorded as pending. */
-  answer: (requestId: string, decision: 'allow' | 'deny') => Promise<void>;
+  answer: (requestId: string, decision: 'allow' | 'deny', message?: string) => Promise<void>;
 }
 
 /** What a card was about, for the chat log: "Bash: mkdir x". */
@@ -47,12 +47,14 @@ export function usePermissions(log: (owner: PermissionOwner, text: string) => vo
     }));
   }, [commit]);
 
-  const resolve = useCallback((requestId: string, how: How) => {
+  const resolve = useCallback((requestId: string, how: How, reply?: string) => {
     const req = ref.current.find((r) => r.requestId === requestId);
     if (!req) return; // already gone: whoever removed it logged it
     commit(resolveRequest(ref.current, requestId));
     if (how === 'allowed') logRef.current(req.owner, `Allowed: ${describe(req)}`);
     else if (how === 'denied') logRef.current(req.owner, `Denied: ${describe(req)}`);
+    else if (how === 'replied' && reply) logRef.current(req.owner, replyLine(req.tool, reply));
+    else if (how === 'auto-allowed') logRef.current(req.owner, `Allowed (Bypass perms): ${describe(req)}`);
     else if (how === 'timeout') logRef.current(req.owner, `Denied (no answer in time): ${describe(req)}`);
   }, [commit]);
 
@@ -60,17 +62,18 @@ export function usePermissions(log: (owner: PermissionOwner, text: string) => vo
     commit(dropOwner(ref.current, owner));
   }, [commit]);
 
-  const answer = useCallback(async (requestId: string, decision: 'allow' | 'deny') => {
+  const answer = useCallback(async (requestId: string, decision: 'allow' | 'deny', message?: string) => {
     const req = ref.current.find((r) => r.requestId === requestId);
     if (!req) return;
     const target = req.owner.kind;
     const agentId = req.owner.kind === 'agent' ? req.owner.agentId : null;
     let ok = false;
     try {
-      ok = (await bar.answerPermission(target, agentId, requestId, decision)).ok;
+      ok = (await bar.answerPermission(target, agentId, requestId, decision, message)).ok;
     } catch { /* treated as not accepted */ }
     // ok: main sent it. Not ok: main no longer holds the request (it ended or was answered), so the card is stale.
-    resolve(requestId, ok ? (decision === 'allow' ? 'allowed' : 'denied') : 'ended');
+    // A reply is logged once: main's 'permission-resolved' event normally arrives first and removes the card.
+    resolve(requestId, ok ? (message !== undefined ? 'replied' : decision === 'allow' ? 'allowed' : 'denied') : 'ended', message);
   }, [resolve]);
 
   return { requests, add, resolve, clearOwner, answer };

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { bar } from '../lib/bridge';
 import { useSettings } from '../context/SettingsContext';
@@ -8,6 +8,7 @@ import type { PermissionsApi } from './usePermissions';
 import { levelFor, totalTokens, xpFor } from '../lib/leveling';
 import { popXp } from '../lib/effects';
 import { formatTokens } from '../lib/format';
+import { modeChangeLine } from '../lib/permissions';
 import type { ClaudeEvent, ModelAlias, Usage } from '../types';
 
 export interface Streaming {
@@ -105,6 +106,20 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
   const thinking = useRef('');
   const doneUsage = useRef<Usage>(EMPTY_USAGE);
 
+  // Streamed text is published once per animation frame; the refs above hold the truth, flush() persists from them.
+  const frameRef = useRef(0);
+  const publishStream = useCallback(() => {
+    frameRef.current = 0;
+    setStreaming({ wsId: runWsId.current, text: text.current, thinking: thinking.current });
+  }, []);
+  const scheduleStream = useCallback(() => {
+    if (!frameRef.current) frameRef.current = requestAnimationFrame(publishStream);
+  }, [publishStream]);
+  const cancelStream = useCallback(() => {
+    if (frameRef.current) { cancelAnimationFrame(frameRef.current); frameRef.current = 0; }
+  }, []);
+  useEffect(() => cancelStream, [cancelStream]);
+
   const flushThinking = useCallback(() => {
     if (thinking.current && runWsId.current) {
       persistMessage(runWsId.current, { kind: 'thinking', text: thinking.current });
@@ -118,8 +133,9 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
       persistMessage(runWsId.current, { kind: 'assistant', text: text.current });
     }
     text.current = '';
+    cancelStream(); // no stale text may be published after the saved message
     setStreaming(EMPTY_STREAM);
-  }, [flushThinking, persistMessage]);
+  }, [cancelStream, flushThinking, persistMessage]);
 
   const applyUsage = useCallback((ev: ClaudeEvent) => {
     const current = getSettings();
@@ -145,6 +161,7 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
         text.current = '';
         thinking.current = '';
         doneUsage.current = EMPTY_USAGE;
+        cancelStream();
         setStreaming(EMPTY_STREAM);
         setLiveUsage(EMPTY_USAGE);
         setRunning(true);
@@ -172,14 +189,14 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
 
       case 'thinking':
         thinking.current += ev.text ?? '';
-        setStreaming({ wsId: runWsId.current, text: text.current, thinking: thinking.current });
+        scheduleStream();
         setStatus('Meditating…');
         break;
 
       case 'text':
         flushThinking();
         text.current += ev.text ?? '';
-        setStreaming({ wsId: runWsId.current, text: text.current, thinking: '' });
+        scheduleStream();
         setStatus('Writing…');
         break;
 
@@ -209,8 +226,14 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
         say('Needs your OK!', 3000);
         break;
 
+      case 'permission-mode':
+        // The footer mode reached this running process (or could not): say so in the chat of the run.
+        flush();
+        if (runWsId.current) persistMessage(runWsId.current, { kind: 'meta', text: modeChangeLine(ev.mode, ev.ok === true) });
+        break;
+
       case 'permission-resolved':
-        if (ev.requestId) permissions.resolve(ev.requestId, ev.how ?? 'ended');
+        if (ev.requestId) permissions.resolve(ev.requestId, ev.how ?? 'ended', ev.reply);
         setStatus('Working…');
         break;
 
@@ -252,6 +275,7 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
 
       case 'end':
         flush();
+        cancelStream();
         if (runWsId.current) permissions.clearOwner({ kind: 'quest', wsId: runWsId.current }); // the process is gone
         // A run that ended with an error or was stopped cancels the agents it had delegated to.
         if (runWsId.current) endObserved(runWsId.current, ev.code !== 0);

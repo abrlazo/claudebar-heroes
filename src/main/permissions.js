@@ -5,6 +5,20 @@
 // and an allow always carries the tool input main stored, never anything the renderer sent.
 
 const MAX_PENDING = 20;
+const MAX_REPLY_CHARS = 2000;
+// The four footer modes, from the most to the least restrictive. Only these ever reach `set_permission_mode`.
+const MODES = ['plan', 'default', 'acceptEdits', 'bypassPermissions'];
+const isMode = (mode) => typeof mode === 'string' && MODES.includes(mode);
+/** What main does with a `can_use_tool` request in a mode: show a card, allow at once or deny at once. Unknown = ask. */
+function policyForMode(mode) {
+  if (mode === 'bypassPermissions') return 'allow';
+  if (mode === 'acceptEdits' || mode === 'plan') return 'deny';
+  return 'ask';
+}
+/** True when going from `from` to `to` leaves the run LESS free than before (a failed switch of that kind must not be ignored). */
+const isTightening = (from, to) => (
+  (from === 'bypassPermissions' || from === 'acceptEdits') && isMode(to) && MODES.indexOf(to) < MODES.indexOf(from)
+);
 const MAX_ID_LENGTH = 100;
 const INTERACTIVE_TOOLS = new Set(['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode']);
 
@@ -24,6 +38,17 @@ function sanitizeText(value, maxChars) {
   const clean = head.replace(/\r\n?/g, '\n').replace(CONTROL_RE, '').replace(INVISIBLE_RE, '');
   if (!clipped && clean.length <= limit) return clean;
   return `${clean.slice(0, limit - 3)}...`;
+}
+
+/** A reply typed by the user: control, bidi and zero-width characters removed, trimmed, at most 2000 characters. '' if unusable. */
+function sanitizeReply(text) {
+  if (typeof text !== 'string') return '';
+  return sanitizeText(text, MAX_REPLY_CHARS * 2).trim().slice(0, MAX_REPLY_CHARS).trim();
+}
+
+/** What Claude is told for a reply. Wrapped, because a bare sentence was misread as a settings hook. */
+function wrapReply(clean) {
+  return `The user denied this tool call and replied: ${JSON.stringify(clean)}. Do what the user replied instead of retrying the denied call.`;
 }
 
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -95,6 +120,7 @@ const DENY_MESSAGES = {
   timeout: 'No answer in Claudebar within the time limit, so this request was denied.',
   stopped: 'The run was stopped in Claudebar, so this request was denied.',
   interactive: 'This app cannot show that question or plan screen; ask the user in the chat instead.',
+  mode: 'The current permission mode in Claudebar does not allow this request; the user can switch to Ask me each time.',
   full: 'Too many permission requests are waiting in Claudebar, so this one was denied.',
 };
 
@@ -133,13 +159,31 @@ function createBroker({ now = Date.now, setTimer = setTimeout, clearTimer = clea
       pendingById.set(requestId, { requestId, input: isObject(request.input) ? structuredClone(request.input) : {}, toolUseId: request.tool_use_id, createdAt, expiresAt, timer, view });
       return { ok: true, view };
     },
-    /** The answer to a pending request, once. `decision` must be exactly 'allow' or 'deny'. */
-    answer(requestId, decision) {
+    /**
+     * The answer to a pending request, once. `decision` must be exactly 'allow' or 'deny'. `reply` (optional text) is only
+     * valid with 'deny': Claude then gets the wrapped text. An allow can never carry text, and never anything but main's stored input.
+     */
+    answer(requestId, decision, reply) {
       if (decision !== 'allow' && decision !== 'deny') return { ok: false, reason: 'invalid' };
+      if (reply !== undefined && decision !== 'deny') return { ok: false, reason: 'invalid' };
+      const clean = reply === undefined ? null : sanitizeReply(reply);
+      if (clean === '') return { ok: false, reason: 'invalid' };
       if (typeof requestId !== 'string' || !pendingById.has(requestId)) return { ok: false, reason: 'unknown' };
       const entry = finish(requestId);
+      if (clean) return { ok: true, response: { behavior: 'deny', message: wrapReply(clean) }, view: entry.view, reply: clean };
       const response = decision === 'allow' ? { behavior: 'allow', updatedInput: entry.input } : denial('user');
       return { ok: true, response, view: entry.view };
+    },
+    /** Main's own answer (a mode policy), never from the renderer. Allow uses the stored input. */
+    autoAnswer(requestId, decision, reason = 'mode') {
+      if (typeof requestId !== 'string' || !pendingById.has(requestId)) return { ok: false, reason: 'unknown' };
+      const entry = finish(requestId);
+      const response = decision === 'allow' ? { behavior: 'allow', updatedInput: entry.input } : denial(reason);
+      return { ok: true, response, view: entry.view };
+    },
+    /** Answers everything still pending the same way (a switch to Bypass). Returns each request once. */
+    resolveAll(decision, reason = 'mode') {
+      return [...pendingById.keys()].map((id) => ({ requestId: id, ...this.autoAnswer(id, decision, reason) }));
     },
     /** Claude withdrew a request (control_cancel_request). */
     cancel(requestId) {
@@ -177,7 +221,27 @@ function buildUserLine(prompt) {
   return `${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: String(prompt) }] } })}\n`;
 }
 
+/** The stdin line that switches the run's permission mode, or null for a mode that is not one of the four footer modes. */
+function buildSetModeLine(requestId, mode) {
+  if (!isMode(mode) || typeof requestId !== 'string' || !requestId) return null;
+  return `${JSON.stringify({ type: 'control_request', request_id: requestId, request: { subtype: 'set_permission_mode', mode } })}\n`;
+}
+
+/** Reads a `control_response` line: `{ requestId, ok, mode, errorCode }`, or null for any other message. */
+function parseModeResponse(msg) {
+  if (!isObject(msg) || msg.type !== 'control_response' || !isObject(msg.response)) return null;
+  const r = msg.response;
+  if (typeof r.request_id !== 'string') return null;
+  const ok = r.subtype === 'success';
+  return {
+    requestId: r.request_id,
+    ok,
+    mode: ok && isObject(r.response) && typeof r.response.mode === 'string' ? r.response.mode : null,
+    errorCode: !ok && typeof r.error_code === 'string' ? r.error_code.slice(0, 60) : null,
+  };
+}
+
 module.exports = {
-  MAX_PENDING, DENY_MESSAGES, sanitizeText, describeRequest, isInteractiveOnly, createBroker,
+  MAX_PENDING, MAX_REPLY_CHARS, MODES, isMode, policyForMode, isTightening, sanitizeReply, wrapReply, buildSetModeLine, parseModeResponse, DENY_MESSAGES, sanitizeText, describeRequest, isInteractiveOnly, createBroker,
   buildControlResponse, buildErrorResponse, buildUserLine,
 };
