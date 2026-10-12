@@ -91,6 +91,46 @@ keep.add(request('k1', mutated));
 mutated.command = 'something else';
 check('allow uses main\'s own copy of the input, even if the original object changes later', keep.answer('k1', 'allow').response.updatedInput.command === 'rm -rf /tmp/x');
 
+// ----- mode policy, replies, live mode switch lines -----
+check('policy table: default asks, bypass allows, acceptEdits and plan deny, unknown asks',
+  perm.policyForMode('default') === 'ask' && perm.policyForMode('bypassPermissions') === 'allow' && perm.policyForMode('acceptEdits') === 'deny'
+  && perm.policyForMode('plan') === 'deny' && perm.policyForMode('dontAsk') === 'ask' && perm.policyForMode(undefined) === 'ask');
+check('tightening: from bypass or acceptEdits to something stricter only',
+  perm.isTightening('bypassPermissions', 'default') && perm.isTightening('bypassPermissions', 'plan') && perm.isTightening('acceptEdits', 'default')
+  && perm.isTightening('acceptEdits', 'plan') && !perm.isTightening('default', 'bypassPermissions') && !perm.isTightening('plan', 'acceptEdits')
+  && !perm.isTightening('default', 'plan') && !perm.isTightening('bypassPermissions', 'bypassPermissions') && !perm.isTightening('x', 'default'));
+check('reply cleaning: control and bidi removed, trimmed', perm.sanitizeReply('  use \u0007staging‮ folder\u0000  ') === 'use staging folder');
+check('reply cleaning: 3000 characters become 2000', perm.sanitizeReply('a'.repeat(3000)).length === 2000);
+check('reply cleaning: empty, blank and non-strings give ""', perm.sanitizeReply('') === '' && perm.sanitizeReply(' \n\t ') === '' && perm.sanitizeReply('\u0000\u0007') === '' && perm.sanitizeReply(5) === '' && perm.sanitizeReply(null) === '');
+const rb = perm.createBroker({ ...fakeTimers });
+rb.add(request('p1'));
+check('an allow that carries a message is refused and stays pending', rb.answer('p1', 'allow', 'x').ok === false && rb.answer('p1', 'allow', '').ok === false && rb.has('p1'));
+check('a reply that is empty after cleaning is refused and stays pending', rb.answer('p1', 'deny', ' \u0007 ').ok === false && rb.answer('p1', 'deny', 7).ok === false && rb.has('p1'));
+const rep = rb.answer('p1', 'deny', 'use "staging" instead\nplease');
+check('a reply denies with the wrapped text, no interrupt, no updatedInput',
+  rep.ok && rep.response.behavior === 'deny' && rep.reply === 'use "staging" instead\nplease'
+  && rep.response.message === 'The user denied this tool call and replied: "use \\"staging\\" instead\\nplease". Do what the user replied instead of retrying the denied call.'
+  && !('interrupt' in rep.response) && !('updatedInput' in rep.response));
+check('a second reply for the same id is refused', rb.answer('p1', 'deny', 'again').ok === false && rb.answer('p1', 'deny').ok === false);
+check('a plain deny and a plain allow still have no message text of the user', (rb.add(request('p2')), rb.answer('p2', 'deny').response.message === perm.DENY_MESSAGES.user));
+rb.add(request('p3', { command: 'echo three' }));
+rb.add(request('p4', { command: 'echo four' }));
+const resolved = rb.resolveAll('allow', 'mode');
+check('resolveAll(allow) answers every pending request with main\'s stored input and leaves nothing pending',
+  resolved.length === 2 && resolved.every((r) => r.ok && r.response.behavior === 'allow') && resolved[0].response.updatedInput.command === 'echo three'
+  && resolved[1].response.updatedInput.command === 'echo four' && rb.pending().length === 0 && rb.resolveAll('allow').length === 0);
+rb.add(request('p5'));
+check('autoAnswer deny uses the mode message; an unknown id is refused', rb.autoAnswer('p5', 'deny', 'mode').response.message === perm.DENY_MESSAGES.mode && rb.autoAnswer('p5', 'deny').ok === false);
+check('set_permission_mode line: allowlisted modes only',
+  JSON.parse(perm.buildSetModeLine('m1', 'bypassPermissions')).request.mode === 'bypassPermissions' && perm.buildSetModeLine('m1', 'plan').endsWith('\n')
+  && perm.buildSetModeLine('m1', 'dontAsk') === null && perm.buildSetModeLine('m1', 'auto') === null && perm.buildSetModeLine('m1', 'x') === null
+  && perm.buildSetModeLine('m1', undefined) === null && perm.buildSetModeLine('', 'plan') === null);
+const okMode = perm.parseModeResponse({ type: 'control_response', response: { subtype: 'success', request_id: 'm1', response: { mode: 'plan' } } });
+const badMode = perm.parseModeResponse({ type: 'control_response', response: { subtype: 'error', request_id: 'm2', error: 'x', error_code: 'bypass_not_launched' } });
+check('parseModeResponse: success, error with code, anything else is null',
+  okMode.ok && okMode.requestId === 'm1' && okMode.mode === 'plan' && !badMode.ok && badMode.errorCode === 'bypass_not_launched'
+  && perm.parseModeResponse({ type: 'assistant' }) === null && perm.parseModeResponse(null) === null && perm.parseModeResponse({ type: 'control_response' }) === null);
+
 // ----- stdin lines (shapes captured from the real CLI) -----
 const allowLine = perm.buildControlResponse('abc', { behavior: 'allow', updatedInput: { file_path: 'x', content: 'hi' } });
 check('allow line matches the verified shape', allowLine === '{"type":"control_response","response":{"subtype":"success","request_id":"abc","response":{"behavior":"allow","updatedInput":{"file_path":"x","content":"hi"}}}}\n');

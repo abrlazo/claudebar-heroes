@@ -3,10 +3,15 @@
 // JSON user line, a tool that needs permission is announced by a `control_request` (`can_use_tool`) on stdout, and the
 // run waits for a `control_response` on stdin (first answer for an id wins, unknown ids are ignored). On SIGINT it
 // sends `control_cancel_request` for what it waits on, then `result`. Prompts: PERMALLOW, PERMTWO, PERMSTALL,
-// PERMASKQ, PERMBIG, PERMSUB; anything else is a short plain run that echoes how it was started.
+// PERMASKQ, PERMBIG, PERMSUB, PERMMODE (tool 1, a 3 s gap, then tool 2 announced unless the live mode is
+// bypassPermissions, like the real CLI); anything else is a short plain run that echoes how it was started.
+// `control_request` `set_permission_mode` is answered like the real CLI: success with the mode, `bypass_not_launched`
+// when Bypass was not allowed at launch (`--allow-dangerously-skip-permissions` or `--permission-mode bypassPermissions`),
+// `invalid_mode` for anything else. FAKE_NO_SETMODE=1 never answers (an old CLI), FAKE_SETMODE_ERROR=1 always errors, FAKE_REJECT_HOST=1 rejects the host flags.
 //
 // Files (paths from the environment): FAKE_ARGS gets one line per start with the argv, FAKE_RUNS "<cwd>|<prompt>",
-// FAKE_RESPONSES every line the app writes to stdin after the prompt (so a test sees exactly what was answered).
+// FAKE_RESPONSES every permission answer the app writes to stdin after the prompt (so a test sees exactly what was
+// answered), FAKE_MODES every `set_permission_mode` line (kept apart so they do not count as answers).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,6 +24,14 @@ const out = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 const sid = `perm-${Math.floor(Math.random() * 1e6)}`;
 const streamIn = argv.includes('--input-format');
 append(process.env.FAKE_ARGS, argv.join(' '));
+// FAKE_REJECT_HOST=1: an old Claude that does not know the host flags (fails before any session, like the real one).
+if (process.env.FAKE_REJECT_HOST === '1' && argv.includes('--permission-prompt-tool')) {
+  process.stderr.write("error: unknown option '--permission-prompt-tool'\n");
+  process.exit(1);
+}
+const MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions'];
+let curMode = flag('--permission-mode') ?? 'default';
+const bypassAllowed = argv.includes('--allow-dangerously-skip-permissions') || curMode === 'bypassPermissions';
 
 const lines = [];
 const waiters = [];
@@ -32,9 +45,20 @@ rl.on('line', (line) => {
   if (!line.trim()) return;
   if (!gotFirst) { gotFirst = true; promptResolve(line); return; }
   if (!streamIn) return; // plain mode: the rest of the prompt text
-  append(process.env.FAKE_RESPONSES, line);
   try {
     const msg = JSON.parse(line);
+    if (msg.type === 'control_request' && msg.request?.subtype === 'set_permission_mode') {
+      append(process.env.FAKE_MODES, line);
+      const rid = msg.request_id;
+      const mode = msg.request.mode;
+      const reply = (response) => out({ type: 'control_response', response: { request_id: rid, ...response } });
+      if (process.env.FAKE_NO_SETMODE === '1') return;
+      if (process.env.FAKE_SETMODE_ERROR === '1' || !MODES.includes(mode)) reply({ subtype: 'error', error: 'Cannot set permission mode', error_code: 'invalid_mode' });
+      else if (mode === 'bypassPermissions' && !bypassAllowed) reply({ subtype: 'error', error: 'not launched with --dangerously-skip-permissions', error_code: 'bypass_not_launched' });
+      else { curMode = mode; reply({ subtype: 'success', response: { mode } }); }
+      return;
+    }
+    append(process.env.FAKE_RESPONSES, line);
     const id = msg?.response?.request_id;
     if (msg.type === 'control_response' && typeof id === 'string' && pendingIds.has(id) && !answers.has(id)) {
       answers.set(id, msg.response.response ?? msg.response);
@@ -44,7 +68,11 @@ rl.on('line', (line) => {
 });
 rl.on('close', () => { if (!gotFirst) promptResolve(''); else if (streamIn) process.exit(0); });
 
-const waitFor = (id) => new Promise((resolve) => {
+// An agent's request ids get its name as a suffix, so a Quest run and an agent can wait at the same time (the app
+// keys its cards by request id, like the real CLI's unique ids).
+const idSuffix = flag('--agent') ? `-${flag('--agent')}` : '';
+const waitFor = (rawId) => new Promise((resolve) => {
+  const id = `${rawId}${idSuffix}`;
   const check = () => (answers.has(id) ? resolve(answers.get(id)) : waiters.push(check));
   check();
 });
@@ -72,7 +100,8 @@ append(process.env.FAKE_RUNS, `${process.cwd()}|${prompt.replace(/\n/g, ' ').sli
 out({ type: 'system', subtype: 'init', session_id: sid, model: 'fake' });
 
 const toolUse = (name, input) => out({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_perm', name, input }] } });
-const ask = (id, name, input, extra = {}) => {
+const ask = (rawId, name, input, extra = {}) => {
+  const id = `${rawId}${idSuffix}`;
   pendingIds.add(id);
   toolUse(name, input);
   out({ type: 'control_request', request_id: id, request: { subtype: 'can_use_tool', tool_name: name, display_name: name, input, tool_use_id: 'toolu_perm', ...extra } });
@@ -85,7 +114,7 @@ const finish = () => {
 };
 const settle = (name, response, make) => {
   if (response.behavior === 'allow') { make(); toolResult('ok', false); say(`perm allowed ${name}`); }
-  else { toolResult(response.message ?? 'denied', true); say(`perm denied ${name}`); }
+  else { toolResult(response.message ?? 'denied', true); say(`perm denied ${name}: ${response.message ?? ''}`); }
 };
 
 if (prompt.includes('PERMALLOW')) {
@@ -100,6 +129,20 @@ if (prompt.includes('PERMALLOW')) {
   say(a.behavior === 'allow' ? 'first allowed ' : 'first denied ');
   const b = await waitFor('two-2');
   say(b.behavior === 'allow' ? 'second allowed' : 'second denied');
+  finish();
+} else if (prompt.includes('PERMMODE')) {
+  ask('mode-1', 'Bash', { command: 'mkdir mode-one' });
+  settle('first', await waitFor('mode-1'), () => fs.mkdirSync(path.join(process.cwd(), 'mode-one'), { recursive: true }));
+  await new Promise((r) => setTimeout(r, 3000)); // the work gap in which a test switches the mode
+  if (curMode === 'bypassPermissions') {
+    fs.mkdirSync(path.join(process.cwd(), 'mode-two'), { recursive: true });
+    toolResult('ok', false);
+    say('second ran without asking');
+  } else {
+    ask('mode-2', 'Bash', { command: 'mkdir mode-two' });
+    settle('second', await waitFor('mode-2'), () => fs.mkdirSync(path.join(process.cwd(), 'mode-two'), { recursive: true }));
+  }
+  say(` mode-end=${curMode}`);
   finish();
 } else if (prompt.includes('PERMSTALL')) {
   ask('stall-1', 'Bash', { command: 'sleep 1000' });
@@ -127,6 +170,6 @@ if (prompt.includes('PERMALLOW')) {
   // Plain run: how it was started, so the checks can see the mode (and that a resumed session keeps working).
   await new Promise((r) => setTimeout(r, 300));
   out({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: '/repo/a.ts' } }] } });
-  say(`plain done (agent=${flag('--agent') ?? 'none'} resume=${flag('--resume') ?? 'none'} mode=${flag('--permission-mode') ?? 'default'} stdin=${streamIn ? 'stream' : 'text'}) task=${prompt.replace(/\n/g, ' ').slice(0, 200)}`);
+  say(`plain done (live=${curMode} agent=${flag('--agent') ?? 'none'} resume=${flag('--resume') ?? 'none'} mode=${flag('--permission-mode') ?? 'default'} stdin=${streamIn ? 'stream' : 'text'}) task=${prompt.replace(/\n/g, ' ').slice(0, 200)}`);
   finish();
 }
