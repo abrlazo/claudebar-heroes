@@ -29,7 +29,7 @@ Work through the list in order of severity (correctness and security first, then
 - Anything with listeners, timers or canvas work gets cleaned up (`game.destroy()`, effect cleanup).
 - Keep both themes working and keep element ids and classes stable because the stylesheet targets them.
 - Edit `src/renderer`, never `dist`. Do not edit `.claude/agents/`, `CLAUDE.md` or `README.md` unless a finding is about them, or a change makes a statement in them untrue (then fix just that statement).
-- Never run `git commit`, `git push`, `git reset`, `git checkout .` or anything that discards work. Committing is gitama's job and only on request.
+- Never run `git commit`, `git push`, `git reset`, `git checkout .` or anything that discards work. Committing is version-controller's job and only on request.
 
 ## 3. Verify
 
