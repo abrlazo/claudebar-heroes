@@ -7,6 +7,7 @@ import { levelFor, totalTokens, xpFor } from '../lib/leveling';
 import type { Workspace, WorkspaceStats } from '../types';
 
 const FLUSH_MS = 10_000;
+const CRIT_LOCAL_MS = 1000; // crits after the first show up locally in one batch per second
 
 const snapshotOf = (ws: Workspace): AchievementSnapshot => ({
   kills: ws.kills || 0,
@@ -27,13 +28,28 @@ interface Pending { wsId: string; bestCombo: number; crits: number; agents: numb
 export function useAchievements(say: (text: string, ms?: number) => void, activeWs: Workspace | null) {
   const { settings, getSettings, patchWorkspaceLocal, addAchievement, updateSettingsLocal } = useSettings();
   const pending = useRef<Pending | null>(null);
+  const localCrits = useRef<{ wsId: string; n: number } | null>(null);
+  const critTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Shows the buffered crits in the local stats (read fresh at that moment, so nothing else is overwritten).
+  const applyLocalCrits = useCallback(() => {
+    if (critTimer.current) { clearTimeout(critTimer.current); critTimer.current = null; }
+    const buffered = localCrits.current;
+    localCrits.current = null;
+    if (!buffered) return;
+    const ws = getSettings().workspaces.find((w) => w.id === buffered.wsId);
+    if (!ws) return;
+    const stats = ws.stats || EMPTY_STATS;
+    patchWorkspaceLocal(ws.id, { stats: { ...stats, crits: stats.crits + buffered.n } });
+  }, [getSettings, patchWorkspaceLocal]);
 
   const flush = useCallback(() => {
+    applyLocalCrits();
     const p = pending.current;
     pending.current = null;
     if (!p) return;
     bar.addStats(p.wsId, { bestCombo: p.bestCombo, crits: p.crits, agents: p.agents, mapsSeen: p.mapsSeen });
-  }, []);
+  }, [applyLocalCrits]);
 
   // Applies a change to the active workspace's stats locally and queues it for the next flush.
   const note = useCallback((change: (s: WorkspaceStats) => WorkspaceStats, queue: (p: Pending) => void) => {
@@ -42,15 +58,33 @@ export function useAchievements(say: (text: string, ms?: number) => void, active
     if (!id || !ws) return;
     if (pending.current && pending.current.wsId !== id) flush();
     pending.current ||= { wsId: id, bestCombo: 0, crits: 0, agents: 0, mapsSeen: [] };
+    const before = ws.stats || EMPTY_STATS;
+    const after = change(before);
+    if (after === before) return; // nothing new (e.g. a combo step that is not a record): no queue, no render
     queue(pending.current);
-    patchWorkspaceLocal(id, { stats: change(ws.stats || EMPTY_STATS) });
+    patchWorkspaceLocal(id, { stats: after });
   }, [flush, getSettings, patchWorkspaceLocal]);
 
   const noteCombo = useCallback((n: number) => note(
     (s) => (n > s.bestCombo ? { ...s, bestCombo: n } : s),
     (p) => { p.bestCombo = Math.max(p.bestCombo, n); },
   ), [note]);
-  const noteCrit = useCallback(() => note((s) => ({ ...s, crits: s.crits + 1 }), (p) => { p.crits += 1; }), [note]);
+  const noteCrit = useCallback(() => {
+    const id = getSettings().activeId;
+    const ws = getSettings().workspaces.find((w) => w.id === id);
+    if (!id || !ws) return;
+    // The first crit shows at once (it unlocks Lucky Strike); later ones are queued for main now but shown in batches.
+    if ((ws.stats?.crits ?? 0) === 0 && !localCrits.current) {
+      note((s) => ({ ...s, crits: s.crits + 1 }), (p) => { p.crits += 1; });
+      return;
+    }
+    if (pending.current && pending.current.wsId !== id) flush();
+    pending.current ||= { wsId: id, bestCombo: 0, crits: 0, agents: 0, mapsSeen: [] };
+    pending.current.crits += 1;
+    if (localCrits.current && localCrits.current.wsId !== id) applyLocalCrits();
+    localCrits.current = { wsId: id, n: (localCrits.current?.n ?? 0) + 1 };
+    if (!critTimer.current) critTimer.current = setTimeout(applyLocalCrits, CRIT_LOCAL_MS);
+  }, [applyLocalCrits, flush, getSettings, note]);
   const noteAgent = useCallback(() => note((s) => ({ ...s, agents: s.agents + 1 }), (p) => { p.agents += 1; }), [note]);
   const noteMap = useCallback((map: string) => note(
     (s) => (s.mapsSeen.includes(map) ? s : { ...s, mapsSeen: [...s.mapsSeen, map] }),

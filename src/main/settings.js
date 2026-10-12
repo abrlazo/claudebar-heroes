@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { app } = require('electron');
 const { designFor, rememberDesign } = require('./hero-design');
 const { MAX_ARCHIVED, cleanArchived, cleanArchive } = require('./archive');
+const { nextDelay } = require('./write-schedule');
 
 const DEFAULTS = {
   permissionMode: 'default',
@@ -144,29 +145,46 @@ function set(patch) {
   return current;
 }
 
+// Writes wait 2 s after the last change but at most 10 s after the first unsaved one (write-schedule.js).
+let firstDirtyAt = null;
 function debounceWrite() {
+  firstDirtyAt ??= Date.now();
   if (writeTimer) clearTimeout(writeTimer);
   writeTimer = setTimeout(() => {
     writeTimer = null;
+    firstDirtyAt = null;
     flushAsync();
-  }, 500);
+  }, nextDelay(firstDirtyAt, Date.now()));
 }
 
+// One async write at a time; a flushSync bumps syncGen so an older snapshot never replaces a newer sync write.
+let writing = false;
+let again = false;
+let syncGen = 0;
+
 async function flushAsync() {
+  if (writing) { again = true; return; }
+  writing = true;
+  const gen = syncGen;
+  const tmp = file() + '.tmp';
   try {
-    const dir = path.dirname(file());
-    fs.mkdirSync(dir, { recursive: true });
-    const tmp = file() + '.tmp';
+    fs.mkdirSync(path.dirname(file()), { recursive: true });
     await fs.promises.writeFile(tmp, JSON.stringify(current));
-    await fs.promises.rename(tmp, file());
+    if (gen !== syncGen) await fs.promises.rm(tmp, { force: true });
+    else await fs.promises.rename(tmp, file());
   } catch (err) {
     console.error('Failed to write settings:', err);
+  } finally {
+    writing = false;
+    if (again) { again = false; flushAsync(); }
   }
 }
 
 function flushSync() {
   if (writeTimer) clearTimeout(writeTimer);
   writeTimer = null;
+  firstDirtyAt = null;
+  syncGen += 1;
   try {
     fs.mkdirSync(path.dirname(file()), { recursive: true });
     fs.writeFileSync(file(), JSON.stringify(current));

@@ -27,6 +27,7 @@ export function createScene(canvas, fixedSize) {
   let t = 0;
   let particles = [];
   let spawnDebt = 0;
+  let sky = { key: '', canvas: null };
 
   function resize() {
     if (fixedSize) {
@@ -57,10 +58,23 @@ export function createScene(canvas, fixedSize) {
       ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
     },
 
+    // The sky bands are painted once into an offscreen canvas and blitted; the key covers colours and size.
     sky(top, bottom) {
-      const bands = 6;
-      const bandH = Math.ceil(G / bands);
-      for (let i = 0; i < bands; i++) d.rect(0, i * bandH, W, bandH + 1, mix(top, bottom, i / (bands - 1)));
+      const key = `${top}|${bottom}|${W}|${H}|${G}`;
+      if (sky.key !== key) {
+        const bands = 6;
+        const bandH = Math.ceil(G / bands);
+        const c = sky.canvas || document.createElement('canvas');
+        c.width = W; // resets the canvas
+        c.height = H;
+        const cx = c.getContext('2d');
+        for (let i = 0; i < bands; i++) {
+          cx.fillStyle = mix(top, bottom, i / (bands - 1));
+          cx.fillRect(0, i * bandH, W, bandH + 1);
+        }
+        sky = { key, canvas: c };
+      }
+      ctx.drawImage(sky.canvas, 0, 0);
     },
 
     disc(cx, cy, r, color) {
@@ -145,9 +159,15 @@ export function createScene(canvas, fixedSize) {
 
 // ----- colour helpers -----
 
+const hexCache = new Map();
 function hex(c) {
-  const n = parseInt(c.slice(1), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  let v = hexCache.get(c);
+  if (!v) {
+    const n = parseInt(c.slice(1), 16);
+    v = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    hexCache.set(c, v);
+  }
+  return v;
 }
 function mix(a, b, f) {
   const [r1, g1, b1] = hex(a);

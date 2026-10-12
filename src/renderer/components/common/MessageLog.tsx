@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import type { ChatMessage } from '../../types';
 
 /** One chat message. `tool` messages render as "⚔ Name summary". */
-function Message({ msg }: { msg: ChatMessage }) {
+const Message = memo(function Message({ msg }: { msg: ChatMessage }) {
   if (msg.kind === 'tool') {
     return (
       <div className="msg tool">
@@ -20,7 +20,16 @@ function Message({ msg }: { msg: ChatMessage }) {
     );
   }
   return <div className={`msg ${msg.kind}`}>{msg.text}</div>;
-}
+});
+
+// Rows are keyed by message identity, not index, so dropping the oldest message (the 500 cap) does not remount the rest.
+const ids = new WeakMap<ChatMessage, number>();
+let nextId = 0;
+const idOf = (m: ChatMessage): number => {
+  let id = ids.get(m);
+  if (id === undefined) { id = ++nextId; ids.set(m, id); }
+  return id;
+};
 
 /**
  * Scrolling chat log pinned to the newest message. `visible` matters because
@@ -50,7 +59,7 @@ export function MessageLog({ messages, streaming = '', streamingThinking = '', w
 
   return (
     <div className="msg-log" ref={ref}>
-      {messages.map((msg, i) => <Message key={i} msg={msg} />)}
+      {messages.map((msg) => <Message key={idOf(msg)} msg={msg} />)}
       {streamingThinking && (
         <details className="msg thinking" open>
           <summary>🧘 Meditating…</summary>

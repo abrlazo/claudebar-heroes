@@ -10,6 +10,7 @@ import { ENEMY_TYPES, BOSSES, LEGENDARY_BOSS, createMonster } from './enemies.js
 import { prestigeFor } from './prestige.js';
 import { createAura } from './aura.js';
 import { rollBossKind, stageKey } from './boss.js';
+import { frameInterval, frameDue, clampDt } from './pacing.js';
 
 const HERO_X = 40;            // hero's fixed screen position
 const HERO_REACH = 46;        // how far in front of HERO_X the hero can hit
@@ -73,8 +74,12 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
   }
 
   const scene = createScene(sceneCanvas);
-  const resizeObserver = new ResizeObserver(() => scene.resize());
+  // The stage width is cached: reading clientWidth after style writes forces a layout every frame.
+  let stageW = stage.clientWidth;
+  const width = () => stageW || stage.clientWidth;
+  const resizeObserver = new ResizeObserver(() => { scene.resize(); stageW = stage.clientWidth; });
   resizeObserver.observe(sceneCanvas);
+  resizeObserver.observe(stage);
   const sprite = createSprite(heroCanvas);
   const aura = createAura(auraCanvas);
   let frameId = 0;
@@ -156,7 +161,7 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
     stage.appendChild(el);
 
     const enemy = {
-      el, x: stage.clientWidth + 10, hp: maxHp, maxHp, monster, hpFill, look: enemyData, boss: !!bossLook,
+      el, x: width() + 10, hp: maxHp, maxHp, monster, hpFill, look: enemyData, boss: !!bossLook,
       atk: (6 + mapIndex() * 2 + loops) * (bossLook ? (bossLook.legendary ? LEGENDARY_ATK_MULT : BOSS_ATK_MULT) : 1),
       legendary: !!bossLook?.legendary,
     };
@@ -165,9 +170,10 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
     place(enemy);
   }
 
+  // Writes only what changed (xShown / hpShown start undefined, so the first call writes both).
   function place(enemy) {
-    enemy.el.style.transform = `translateX(${enemy.x}px)`;
-    enemy.hpFill.style.width = `${(enemy.hp / enemy.maxHp) * 100}%`;
+    if (enemy.x !== enemy.xShown) { enemy.el.style.transform = `translateX(${enemy.x}px)`; enemy.xShown = enemy.x; }
+    if (enemy.hp !== enemy.hpShown) { enemy.hpFill.style.width = `${(enemy.hp / enemy.maxHp) * 100}%`; enemy.hpShown = enemy.hp; }
   }
 
   // ----- Allies (Minions) -----
@@ -363,8 +369,16 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
     }
   }
 
+  // Full pace (30 fps) while anything moves; a slow one (12 fps) while the hero sleeps and only the weather runs.
+  function isBusy() {
+    return state.awake || state.transitioning || state.enemies.length > 0 || state.projectiles.length > 0
+      || sprite.pose !== 'sleep' || aura.bursting;
+  }
+
   function tick(now) {
-    const dt = Math.min(now - state.lastTime, 100); // ms; clamp after tab sleeps
+    frameId = requestAnimationFrame(tick); // first, so an exception below cannot stop the loop
+    if (!frameDue(now, state.lastTime, frameInterval(isBusy()))) return;
+    const dt = clampDt(now, state.lastTime); // ms; clamp after tab sleeps
     state.lastTime = now;
     state.worldMoving = false;
     if (state.awake && !state.transitioning && state.hero) step(dt);
@@ -380,8 +394,6 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
         drawProjectile(ctx, p.x / SCENE_PX, p.y / SCENE_PX, p.type); // scene canvas is half resolution
       }
     }
-
-    frameId = requestAnimationFrame(tick);
   }
 
   function step(dt) {
@@ -399,7 +411,7 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
         hitProjectile(p, front);
         return false;
       }
-      return p.x < stage.clientWidth;
+      return p.x < width();
     });
 
     const front = state.enemies[0];
@@ -438,7 +450,7 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
 
     state.nextSpawnIn -= dt;
     const last = state.enemies[state.enemies.length - 1];
-    const roomToSpawn = !last || last.x < stage.clientWidth - 90;
+    const roomToSpawn = !last || last.x < width() - 90;
     if (state.nextSpawnIn <= 0 && roomToSpawn) {
       // Bosses are rare: each stage rolls once (BOSS_CHANCE map boss, LEGENDARY_CHANCE dragon) when the line (kills so far + monsters
       // alive) first reaches 7. On a hit only the boss spawns, so it is the stage-clearing kill and
@@ -467,7 +479,9 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
       timers.forEach(clearTimeout);
       timers.clear();
       stage.classList.remove('legend-flash');
-      for (const e of state.enemies) e.el.remove();
+      // Dying / fleeing enemies and damage numbers are only removed by timers, which are gone now.
+      stage.querySelectorAll(':scope > .enemy, :scope > .damage').forEach((n) => n.remove());
+      fade.classList.remove('on');
       state.enemies = [];
       comboEl.remove();
     },
