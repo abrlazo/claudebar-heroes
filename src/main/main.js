@@ -282,7 +282,7 @@ function registerIpc() {
   const ACHIEVEMENT_IDS = [
     'first-blood', 'warm-up', 'stage-clear', 'level-2', 'combo-3', 'first-crit', 'first-agent',
     'kills-100', 'kills-500', 'level-10', 'level-15', 'combo-5', 'crits-100', 'first-boss', 'agents-10', 'maps-all',
-    'kills-2500', 'kills-10000', 'level-25', 'level-45', 'bosses-all', 'boss-x10', 'agents-100', 'tokens-10m',
+    'kills-2500', 'kills-10000', 'level-25', 'level-45', 'bosses-all', 'dragon-slayer', 'boss-x3', 'agents-100', 'tokens-10m',
   ];
   ipcMain.handle('workspace:achievement', (_e, id, achId) => (
     typeof id === 'string' && typeof achId === 'string' && ACHIEVEMENT_IDS.includes(achId) ? settings.addAchievement(id, achId) : settings.get()
@@ -291,6 +291,8 @@ function registerIpc() {
     typeof id === 'string' && delta && typeof delta === 'object' ? settings.addStats(id, delta) : settings.get()
   ));
   ipcMain.handle('achievements:backfilled', () => settings.markMigration('achievementsBackfillV1'));
+  // The one-time "boss badges were re-synced" bubble was shown: main alone can clear the pending flag (no payload is read).
+  ipcMain.handle('achievements:syncNoticeSeen', () => settings.clearAchievementSyncNotice());
   ipcMain.handle('workspace:update', (_e, id, patch) => {
     const { kills, map } = patch; // the renderer may only touch map progress
     return settings.updateWorkspace(id, Object.fromEntries(

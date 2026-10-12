@@ -6,6 +6,7 @@ const { app } = require('electron');
 const { designFor, rememberDesign } = require('./hero-design');
 const { MAX_ARCHIVED, cleanArchived, cleanArchive } = require('./archive');
 const { nextDelay } = require('./write-schedule');
+const { syncAchievements } = require('./achievement-sync');
 
 const DEFAULTS = {
   permissionMode: 'default',
@@ -118,6 +119,14 @@ function load() {
   if (!s.migrations.trophyResetV2) {
     s.workspaces = s.workspaces.map((w) => ({ ...w, trophies: {} }));
     s.migrations.trophyResetV2 = true;
+    needsFlush = true;
+  }
+  // One-time: drop boss badges whose trophies are gone (see achievement-sync.js). Runs after the resets, so it sees the final shelf.
+  if (!s.migrations.achievementSyncV1) {
+    const r = syncAchievements(s.workspaces);
+    s.workspaces = r.workspaces;
+    s.migrations.achievementSyncV1 = true;
+    if (r.changed) s.migrations.achievementSyncNotice = true; // pending one-time bubble, cleared by the renderer's ack
     needsFlush = true;
   }
   return s;
@@ -246,6 +255,15 @@ function markMigration(name) {
   return s;
 }
 
+// The renderer showed the one-time sync bubble: delete the pending flag (it can only be cleared, never set, from outside).
+function clearAchievementSyncNotice() {
+  if (!get().migrations.achievementSyncNotice) return get();
+  const { achievementSyncNotice, ...rest } = get().migrations;
+  const s = set({ migrations: rest });
+  flushSync();
+  return s;
+}
+
 function addMessage(wsId, message) {
   const s = get();
   const ws = s.workspaces.find((w) => w.id === wsId);
@@ -359,6 +377,6 @@ function clearArchive(wsId) {
 
 module.exports = {
   archiveAgent, deleteArchived, clearArchive,
-  get, set, active, updateWorkspace, addTrophy, addAchievement, addStats, markMigration, addUsage, importWorkspace, selectWorkspace, removeWorkspace, rerollHero, applyDesign,
+  get, set, active, updateWorkspace, addTrophy, addAchievement, addStats, markMigration, clearAchievementSyncNotice, addUsage, importWorkspace, selectWorkspace, removeWorkspace, rerollHero, applyDesign,
   newAgent, updateAgent, addAgent, removeAgent, addMessage, flushSync,
 };

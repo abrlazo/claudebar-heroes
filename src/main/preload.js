@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('bar', {
   addAchievement: (id, achId) => ipcRenderer.invoke('workspace:achievement', id, achId),
   addStats: (id, delta) => ipcRenderer.invoke('workspace:stats', id, delta),
   achievementsBackfilled: () => ipcRenderer.invoke('achievements:backfilled'),
+  achievementSyncNoticeSeen: () => ipcRenderer.invoke('achievements:syncNoticeSeen'),
   updateWorkspace: (id, patch) => ipcRenderer.invoke('workspace:update', id, patch),
 
   setClickThrough: (ignore) => ipcRenderer.send('window:clickThrough', ignore),
