@@ -9,7 +9,11 @@ const MAX_ARCHIVE_MESSAGES = 200; // messages per chat (the first one, the task,
 const MAX_MESSAGE_CHARS = 4000; // characters per message text
 const MAX_CHAT_CHARS = 40000; // characters per chat in total
 const MAX_INPUT_MESSAGES = 1000; // looked at per chat before the caps (cheap cut for hostile input)
-const NUMBER_CAP = 1e12;
+const NUMBER_CAP = 1e12; // token counts
+const TIME_CAP = 8.64e15; // the largest time a JS Date can hold; real timestamps (about 1.8e12) must pass through
+// Before this fix times were clamped to NUMBER_CAP (1e12 = 2001-09-09), so every stored time reads the same.
+// That value cannot be a real time of an agent run, so it is treated as "unknown" (0, or null for endedAt).
+const LOST_TIME = NUMBER_CAP;
 
 const STATUSES = ['done', 'error', 'cancelled'];
 const REASONS = ['idle', 'closed'];
@@ -19,6 +23,7 @@ const ID_PATTERN = /^[\w:.-]{1,100}$/;
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
 const num = (v) => (Number.isFinite(v) && v >= 0 ? Math.min(v, NUMBER_CAP) : 0);
+const time = (v) => (Number.isFinite(v) && v > 0 && v !== LOST_TIME ? Math.min(v, TIME_CAP) : 0);
 
 // One chat message rebuilt by kind, or null when it is not a known shape.
 function cleanMessage(raw) {
@@ -77,9 +82,9 @@ function cleanArchived(raw) {
     observed: raw.observed === true,
     status: raw.status,
     reason: raw.reason,
-    startedAt: num(raw.startedAt),
-    endedAt: Number.isFinite(raw.endedAt) && raw.endedAt >= 0 ? Math.min(raw.endedAt, NUMBER_CAP) : null,
-    archivedAt: num(raw.archivedAt),
+    startedAt: time(raw.startedAt),
+    endedAt: time(raw.endedAt) || null,
+    archivedAt: time(raw.archivedAt),
     usage: { input: num(usage.input), output: num(usage.output), cacheRead: num(usage.cacheRead), cacheCreate: num(usage.cacheCreate) },
     sessionId: typeof raw.sessionId === 'string' && raw.sessionId ? raw.sessionId.slice(0, 100) : null,
     messages: capMessages(messages, input.length - window.length),

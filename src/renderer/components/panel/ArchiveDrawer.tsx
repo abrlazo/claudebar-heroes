@@ -20,7 +20,8 @@ interface ArchiveDrawerProps {
 }
 
 const totalTokens = (a: ArchivedAgent) => a.usage.input + a.usage.output + a.usage.cacheRead + a.usage.cacheCreate;
-const when = (t: number) => new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+// Times saved by an older build were all clamped to one value; main turns them into 0 ("unknown").
+const when = (t: number) => (t > 0 ? new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'time unknown');
 const timeOf = (t: number) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 function duration(a: ArchivedAgent): string {
   if (!a.endedAt || a.endedAt < a.startedAt) return '';
@@ -115,7 +116,7 @@ export function ArchiveDrawer({ open, wsId, archive, onClose, onDelete, onClear 
                   {[
                     selected.definition,
                     REASONS[selected.reason],
-                    selected.endedAt && selected.endedAt > selected.startedAt ? `${when(selected.startedAt)} - ${timeOf(selected.endedAt)}` : when(selected.startedAt),
+                    selected.startedAt > 0 && selected.endedAt && selected.endedAt > selected.startedAt ? `${when(selected.startedAt)} - ${timeOf(selected.endedAt)}` : when(selected.startedAt),
                     duration(selected),
                     totalTokens(selected) ? `${formatTokens(totalTokens(selected))} tokens` : '',
                   ].filter(Boolean).join(' · ')}
