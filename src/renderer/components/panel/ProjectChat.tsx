@@ -11,16 +11,10 @@ import { usageLine } from '../../hooks/useClaudeRun';
 import type { PermissionsApi } from '../../hooks/usePermissions';
 import type { WorkspaceActions } from '../../hooks/useWorkspaceActions';
 import type { QueuedMessage } from '../../lib/queue';
-import { forOwner } from '../../lib/permissions';
+import { forOwner, PERMISSION_MODE_OPTIONS } from '../../lib/permissions';
 import type { ModelAlias, PermissionMode, Workspace } from '../../types';
 
 const IMPORT = '__import__';
-const PERMISSION_MODES: [PermissionMode, string][] = [
-  ['default', 'Ask me each time'],
-  ['acceptEdits', 'Accept edits'],
-  ['plan', 'Plan only'],
-  ['bypassPermissions', 'Bypass perms'],
-];
 
 /**
  * Chat with Claude Code inside the selected project, plus the project /
@@ -104,7 +98,7 @@ export function ProjectChat({
             index={1}
             total={cards.length}
             visible={visible}
-            onAnswer={(id, decision) => { void permissions.answer(id, decision); }}
+            onAnswer={(id, decision, message) => { void permissions.answer(id, decision, message); }}
           />
         </div>
       )}
@@ -166,11 +160,11 @@ export function ProjectChat({
           <select
             id="permission-mode"
             className="flex-1"
-            title="Permission mode. Ask me each time: Claude asks you here (Allow once / Deny) before a risky tool runs. Accept edits and Bypass perms skip the questions. Ask chat is unaffected."
+            title="Permission mode. Ask me each time: Claude asks you here (Allow once / Deny) before a risky tool runs. Accept edits and Bypass perms skip the questions. A change also applies to a chat or agent that is working right now. Ask chat is unaffected."
             value={settings.permissionMode}
             onChange={(e) => updateSettings({ permissionMode: e.target.value as PermissionMode })}
           >
-            {PERMISSION_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            {PERMISSION_MODE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
           <button id="new-session" className="flex-1" title="Start a fresh conversation" onClick={workspaceActions.newSession}>
             New session
