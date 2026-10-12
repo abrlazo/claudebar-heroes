@@ -49,7 +49,8 @@ const rgba = (rgb, a) => `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${Math.max(0, Ma
 /**
  * @param {HTMLCanvasElement} canvas
  * @returns {{setColor(hex: string|null): void, setLightning(on: boolean): void,
- *            setActive(active: boolean): void, burst(): void, update(dtMs: number): void}}
+ *            setActive(active: boolean): void, burst(): void, update(dtMs: number): void,
+ *            readonly bursting: boolean}}
  */
 export function createAura(canvas) {
   canvas.width = W;
@@ -186,6 +187,9 @@ export function createAura(canvas) {
   function snapLie() { lie = lieTarget; blendShape(); }
 
   return {
+    /** True while the power-up burst plays (the game keeps its full frame rate then). */
+    get bursting() { return burstT >= 0; },
+
     /** Aura colour (CSS hex) or null to switch the aura off. */
     setColor(hex) {
       const wasOff = !rgb;
