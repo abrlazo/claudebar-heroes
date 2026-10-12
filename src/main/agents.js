@@ -18,8 +18,8 @@ function spawn({ wsId, agentId, agentName, definitionName = null, prompt, cwd, p
 
   settings.updateAgent(wsId, agentId, { status: 'running', startTime: Date.now(), sessionId });
 
-  // "Ask me each time" (permission mode 'default') lets the agent ask for permission through the app; the other modes never ask.
-  const promptMode = permissionMode === 'default' ? 'host' : 'plain';
+  // Every agent process runs in host mode (the footer mode can then change while it works); main picks the mode, see main.js.
+  const promptMode = claude.projectPromptMode(permissionMode);
   const handle = claude.run({ prompt, cwd, sessionId, permissionMode, agent: definitionName, promptMode }, (event) => {
     if (event.type === 'session') {
       settings.updateAgent(wsId, agentId, { sessionId: event.sessionId });
@@ -51,9 +51,14 @@ function cancelAgent(agentId) {
 }
 
 /** The user's answer to a permission request of this agent's process. False unless that request is pending there. */
-function answerPermission(agentId, requestId, decision) {
+function answerPermission(agentId, requestId, decision, reply) {
   const agent = agents.get(agentId);
-  return !!agent && agent.handle.running && agent.handle.answerPermission(requestId, decision);
+  return !!agent && agent.handle.running && agent.handle.answerPermission(requestId, decision, reply);
+}
+
+/** The footer mode changed: every running agent process switches to it (events come back through its own emit). */
+function setPermissionModeAll(mode) {
+  for (const agent of agents.values()) if (agent.handle.running) agent.handle.setPermissionMode(mode);
 }
 
 /** Denies every pending permission request of every agent (the window reloaded: nobody can see the cards). */
@@ -76,4 +81,4 @@ function cancelAll() {
   agents.clear();
 }
 
-module.exports = { spawn, cancelAgent, isRunning, getActiveAgentCount, cancelAll, answerPermission, denyAllPermissions };
+module.exports = { spawn, cancelAgent, isRunning, getActiveAgentCount, cancelAll, answerPermission, setPermissionModeAll, denyAllPermissions };

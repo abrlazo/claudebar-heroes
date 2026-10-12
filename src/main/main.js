@@ -25,8 +25,6 @@ const MARGIN = 8;
 // DevTools open on launch only for `npm run dev` (--dev); otherwise use the tray menu.
 const isDev = process.argv.includes('--dev');
 const PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions'];
-// A mode from the renderer only counts when it is on the list; otherwise the saved one applies.
-const safeMode = (mode) => (PERMISSION_MODES.includes(mode) ? mode : settings.get().permissionMode);
 const TOGGLE_SHORTCUT = 'CommandOrControl+Shift+Space';
 
 let win = null;
@@ -210,7 +208,8 @@ function registerIpc() {
   // those change only through the validated handlers below.
   ipcMain.handle('settings:set', (_e, patch) => {
     if (!patch || typeof patch !== 'object') return settings.get();
-    const { workspaces, summonDesigns, migrations, archive, ...rest } = patch; // archive lives in workspaces; dropped for clarity
+    // archive lives in workspaces; permissionMode only changes through settings:update (validated, and applied to live runs)
+    const { workspaces, summonDesigns, migrations, archive, permissionMode, ...rest } = patch;
     return settings.set(rest);
   });
 
@@ -312,10 +311,18 @@ function registerIpc() {
     const cursor = screen.getCursorScreenPoint();
     const offset = { x: cursor.x - stripPos.x, y: cursor.y - stripPos.y };
     clearInterval(dragTimer);
+    let lastX = null;
+    let lastY = null;
     dragTimer = setInterval(() => {
       const p = screen.getCursorScreenPoint();
       stripPos = { x: p.x - offset.x, y: p.y - offset.y };
-      win?.setPosition(stripPos.x - leftExtra(), windowY());
+      // Compare the final window position (the drawer can change it mid-drag), not the cursor.
+      const x = stripPos.x - leftExtra();
+      const y = windowY();
+      if (x === lastX && y === lastY) return;
+      lastX = x;
+      lastY = y;
+      win?.setPosition(x, y);
     }, 16);
   });
 
@@ -383,8 +390,8 @@ function registerIpc() {
     runningWsId = ws.id;
     const permissionMode = settings.get().permissionMode;
     mainHandle = claude.run(
-      // 'default' = "Ask me each time": Claude asks through the app (permission events) instead of failing.
-      { prompt, cwd: ws.path, sessionId: ws.sessionId, permissionMode, model, promptMode: permissionMode === 'default' ? 'host' : 'plain' },
+      // Host mode always: Claude asks through the app (permission events) and the footer mode can change mid-run.
+      { prompt, cwd: ws.path, sessionId: ws.sessionId, permissionMode, model, promptMode: claude.projectPromptMode(permissionMode) },
       (event) => {
         // Everything is saved to the workspace that started the run.
         if (event.sessionId) settings.updateWorkspace(ws.id, { sessionId: event.sessionId });
@@ -408,12 +415,14 @@ function registerIpc() {
   // from it: the run answers from the copy it stored when Claude asked, and only for a request it holds as pending.
   ipcMain.handle('permission:answer', (_e, payload) => {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return { ok: false };
-    const { target, agentId, requestId, decision } = payload;
+    const { target, agentId, requestId, decision, message } = payload;
     if (typeof requestId !== 'string' || !requestId || requestId.length > 100) return { ok: false };
     if (decision !== 'allow' && decision !== 'deny') return { ok: false };
-    if (target === 'quest') return { ok: !!mainHandle?.running && mainHandle.answerPermission(requestId, decision) };
+    // A reply (text) only exists together with a deny; an allow can never carry text. The run cleans and caps it.
+    if (message !== undefined && (decision !== 'deny' || typeof message !== 'string' || message.length > 4000)) return { ok: false };
+    if (target === 'quest') return { ok: !!mainHandle?.running && mainHandle.answerPermission(requestId, decision, message) };
     if (target === 'agent' && typeof agentId === 'string' && agentId && agentId.length <= 100) {
-      return { ok: agents.answerPermission(agentId, requestId, decision) };
+      return { ok: agents.answerPermission(agentId, requestId, decision, message) };
     }
     return { ok: false };
   });
@@ -453,9 +462,16 @@ function registerIpc() {
       allowed.panelHeight = panelHeight;
     }
     // Other preferences the renderer may persist (the permission mode is read by every run).
+    const previousMode = settings.get().permissionMode;
     if (PERMISSION_MODES.includes(patch.permissionMode)) allowed.permissionMode = patch.permissionMode;
     if (patch.theme === 'dark' || patch.theme === 'light') allowed.theme = patch.theme;
-    return Object.keys(allowed).length ? settings.set(allowed) : settings.get();
+    const saved = Object.keys(allowed).length ? settings.set(allowed) : settings.get();
+    // The footer mode also applies to the processes that are working right now (main is the only source of the mode).
+    if (allowed.permissionMode && allowed.permissionMode !== previousMode) {
+      if (mainHandle?.running) mainHandle.setPermissionMode(allowed.permissionMode);
+      agents.setPermissionModeAll(allowed.permissionMode);
+    }
+    return saved;
   });
 
   // Everything that can follow a "/" in the chat (agents, skills, custom commands), for the suggestion popup.
@@ -491,7 +507,7 @@ function registerIpc() {
 
   // "/<agent> <task>": runs ONE agent in its own process (its own tab and orb in the UI).
   // The name must match a definition under .claude/agents/; anything else is refused.
-  ipcMain.handle('agents:run', (_e, { wsId, definitionName, displayName, task, permissionMode }) => {
+  ipcMain.handle('agents:run', (_e, { wsId, definitionName, displayName, task }) => {
     const ws = settings.get().workspaces.find((w) => w.id === wsId);
     if (!ws) return { error: 'Project not found.' };
     if (!task || typeof task !== 'string') return { error: 'Tell the agent what to do.' };
@@ -509,7 +525,7 @@ function registerIpc() {
       definitionName: definition.name,
       prompt: task,
       cwd: ws.path,
-      permissionMode: safeMode(permissionMode),
+      permissionMode: settings.get().permissionMode,
     }, (event) => {
       win?.webContents.send('agent:event', event);
     });
@@ -517,7 +533,7 @@ function registerIpc() {
   });
 
   // Follow-up message to an existing agent: resume its Claude session, as the same agent.
-  ipcMain.on('agents:message', (_e, { wsId, agentId, sessionId, definitionName, prompt, permissionMode } = {}) => {
+  ipcMain.on('agents:message', (_e, { wsId, agentId, sessionId, definitionName, prompt } = {}) => {
     if (!prompt || typeof sessionId !== 'string' || !sessionId) return;
     const ws = settings.get().workspaces.find((w) => w.id === wsId);
     if (!ws) return;
@@ -530,7 +546,7 @@ function registerIpc() {
     }
     agents.spawn({
       wsId, agentId, agentName: 'Agent', definitionName: definition?.name ?? null, prompt, cwd: ws.path,
-      permissionMode: safeMode(permissionMode), sessionId,
+      permissionMode: settings.get().permissionMode, sessionId,
     }, emit);
   });
 
