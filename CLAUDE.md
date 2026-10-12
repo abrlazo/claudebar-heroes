@@ -18,7 +18,8 @@ npm start        # vite build, then launch Electron
 npm run dev      # same as start, but opens DevTools
 npm run watch    # rebuild the React UI on save (then Status -> Restart App)
 npm run typecheck # tsc --noEmit over src/renderer
-npm run check     # roster, hero-design validator, aura-width, archive/idle and archive-drawer layout, message-queue and permission-prompt checks (tools/check-roster.mjs, tools/check-aura.mjs, tools/check-archive.mjs, tools/check-drawer.mjs for the drawer's window layout, tools/check-queue.mjs, tools/check-permissions.mjs for `main/permissions.js` and `lib/permissions.ts`)
+npm run check     # roster, hero-design validator, aura-width, archive/idle and archive-drawer layout, message-queue and permission-prompt checks (tools/check-roster.mjs, tools/check-aura.mjs, tools/check-archive.mjs, tools/check-drawer.mjs for the drawer's window layout, tools/check-queue.mjs, tools/check-permissions.mjs for `main/permissions.js` and `lib/permissions.ts`, tools/check-notify.mjs for `main/notify.js`)
+npm run simulate:notify # build, then the focused notification simulation (tools/simulate-notify.mjs with tools/fake-notify.mjs): long/short success, failure wording, Stop, chains, the queue, both switches, the bubble and the toast, the Test button, the spam limit, watching, screenshots
 npm run simulate:perm # build, then the focused permission-prompt simulation (tools/simulate-perm.mjs with tools/fake-perm.mjs): allow/deny, replies, live mode switches in both directions (Quest and agents, pending cards, failed switches), agents, Stop, timeout, forged answers, argv of every mode
 npm run simulate  # build, then run simulated /<agent> invocations, delegation, a boss fight (fake claude `LONGRUN` prompt), idle retirement and the archive (short idle time through `__cbhIdleMs`), the message queue and check the UI (tools/simulate-agents.mjs)
 ```
@@ -65,7 +66,7 @@ The app spawns Claude Code headlessly (`claude -p --output-format stream-json`) 
 **settings.js** - Persistent state
 - Workspaces (projects with hero seed, progress, Claude session)
 - Agents per workspace (name, status, usage, session)
-- User preferences (theme, panelHeight)
+- User preferences (theme, panelHeight, notifyDone, notifyFail)
 - Each workspace keeps separate chat log and hero state
 
 **preload.js** - IPC bridge
@@ -133,6 +134,30 @@ Events: `permission` (`requestId`, `tool`, `summary`, `detail`, `truncatedLines`
 
 **Queued messages** (Expedition tab only): while Claude's own run for the project is busy the textarea stays enabled (placeholder "Claude is busy: Enter queues your message", Stop stays) and an ordinary message, skills and other slash commands included, goes to a per-workspace FIFO queue (`lib/queue.ts`, max `MAX_QUEUED` = 5, a 6th is refused with a meta line; `hooks/useMessageQueue.ts`, in memory only, **lost on quit or reload**). It shows in a queue bar under the chat (`.queue-bar`, a "queued" badge and an x per item). `summon`, `/<agent>` and chains, and a bare `/plan` stay immediate; `/plan <task>` while busy is still refused (not queued). A queued message is saved as a user message only when it is really sent, with the model picked at that moment and the permission mode main reads when it spawns. `useClaudeRun` reports `onEnd({ wsId, clean, stopped })`: a clean end (exit 0, no error, not stopped) makes `App.tsx` `drainQueue` send the next item from inside the end event, so the hero never sleeps between runs (`starting` covers the gap before `start`; `busyNow()` is the synchronous check that stops double sends). Stop, an error or a rejected send pause the queue instead (items kept, meta line, bar offers Resume and Clear; a message typed while paused and idle is sent at once). Drain only sends items of the ACTIVE workspace, because `claude:send` uses `settings.active()` in main; other workspaces keep their queue. Agent tabs are unchanged (no queue; observed agents keep a disabled composer). The simulation uses fake prompts `BRIEFRUN` (12 s, clean) and `SLOWFAIL` (fails after 4 s)
 
+**Notifications** ("work finished" / "something failed"): **main decides, the renderer only shows text main built.** `main/notify.js` is the pure core (no electron import, `tools/check-notify.mjs`); `main.js` has the thin Electron part (`setupNotifier`, `observeRun` / `observeAgent`, `deliverNotification`, `showNative`). It only OBSERVES the events main already sees (the `claude:send` and `agents:run` / `agents:message` callbacks are wrapped by one call each; nothing about a run, chain, queue, permission card or archive changes). A tracker per process (`createTracker`: the Expedition run, or one agent run; observed/delegated agents ride on the Quest process, the Ask chat and `ask()` never notify, rejected sends never start a run) turns `start` / `error` / `result` / `permission-resolved` / `end` into one outcome: `done`, `failed` or `stopped`. Outcomes go to ONE notifier that groups a burst: it fires `QUIET_MS` (1.5 s) after the last outcome and, for successes, while nothing else runs (`mainHandle.running`, `agents.getActiveAgentCount()`), so a chain or a queue drain is ONE notification ("3 tasks finished"). A success is only announced when the burst (earliest start to latest end) lasted `MIN_RUN_MS` (15 s); a failure is announced at any length, does not wait for other work, and is merged into the burst ("1 failed, 2 finished"). Everything is checked at FIRE time.
+
+| Situation | Native notification | In-app cue (`notify:show`) |
+|---|---|---|
+| Success, burst shorter than 15 s | no | no |
+| Success, burst 15 s or longer | yes, unless the panel is open AND the window focused | bubble over the hero (panel closed) or a toast in the panel (panel open) |
+| Failure, any length | same rule as above | same, bubble prefixed with a warning sign, red toast |
+| Stop (`claude:cancel`, `agents:cancel`, the tab's x) | no | no |
+| The chat you are reading (panel open, window focused, Expedition tab, same project and agent) | no | no |
+| Panel open and focused, but another tab or another agent's chat | no (you are looking at the panel) | toast |
+| `notifyDone` / `notifyFail` off | no | no (both channels are silenced, per kind) |
+| More than 4 native per minute, or identical text within 60 s | no (`createLimiter`) | yes |
+| `Notification.isSupported()` false, or the OS reported `failed` (`nativeBroken`) | no | yes |
+| Permission request timed out (`permission-resolved` `how: 'timeout'`) | failure, told once per run (the run's later end is then silent) | same |
+| settings.json could not be written (`settings.onWriteError`, at most once per 10 minutes, never while quitting) | failure "Settings could not be saved..." | same |
+
+*Wording.* Failure text is FIXED phrases only (`classifyFailure`): Claude not found (with the `CLAUDE_BIN` hint), could not start, too old for permission prompts, the permission mode could not be changed, a permission request timed out, not logged in (recognised from stderr by a regex, never copied), "Claude reported an error", "Claude exited with code N" and a generic "did not finish cleanly". Raw stderr, paths and keys never reach a notification. `claude.js` adds an additive `errorCode` (`not-found`, `start`, `host-unsupported`, `mode-switch`) to some `error` events; messages are unchanged. Labels (project and agent names) go through `cleanLabel` (control, bidi and zero-width characters, path-like tokens removed, 40 characters). The internal fail-closed cancel after a failed tightening mode switch is a FAILURE, not a Stop (only the user paths mark a tracker stopped).
+
+*IPC* (all validated in main, plain text only in the renderer): `notify:view` (`bar.setNotifyView({ tab, wsId, agentId })`, tab from an allowlist, ids strings <= 100 or null: what is on screen, sent by `hooks/useNotifications.ts`), `notify:show` (main -> renderer `{ kind, title, text, target }`: the bubble via `say()` when the panel is closed, else the toast `components/common/NotifyCue.tsx`, `role="status"`, never takes focus, hides after 8 s and with the panel), `notify:open` (main -> renderer after a click on the system notification: opens the panel, the Expedition tab, and the agent only if it is still in the list; another project than the active one only opens the panel) and `notify:test` (the Status tab's Test button: fixed text, the spam limit but not the repeat filter, ignores minimum length and watching; answers `{ native }`, false = unavailable, blocked or limited). The renderer never supplies a title, text or target. Native notifications are `silent`, kept referenced until closed (macOS clicks), and `will-quit` disposes the notifier (timers are `unref`'d too) and sets `quitting` so runs cancelled at quit never notify. Windows: `app.setAppUserModelId('com.claudebar.heroes')` before ready (unverified there, like the host flags); macOS can deny notifications silently, which is why the in-app cue always exists and the Test button is there.
+
+*Settings.* `notifyDone` and `notifyFail` (default true; `load()` coerces with `coerceFlag`, only real booleans count); `settings:update` accepts each ONLY when `typeof === 'boolean'`, `settings:set` drops both. Two checkboxes and the Test button in `SettingsControls` (`#notify-done`, `#notify-fail`, `#notify-test`).
+
+*Test seams* (environment of the main process only, read in `main.js`, never settings or IPC; bad values are ignored): `CBH_NOTIFY_LOG=<file>` appends one JSON line per notification that WOULD be native instead of showing it (also skips `isSupported()`), `CBH_NOTIFY_MIN_MS` (>= 0) replaces the 15 s, `CBH_NOTIFY_QUIET_MS` (>= 100) the 1.5 s, `CBH_NOTIFY_MAX_PER_MIN` (>= 1) and `CBH_NOTIFY_DEDUPE_MS` (>= 0) the spam limit, `CBH_NOTIFY_FOCUS=1|0` fixes the window focus, and `CBH_NOTIFY_OFF=1` disables the whole feature (no tracking, no cues): `tools/simulate-agents.mjs`, `simulate-perm.mjs` and `check-aura-ui.mjs` set it so no notification or bubble appears while they run.
+
 **Agent lifecycle**:
 - Status: idle → running → done
 - Minions animate in on spawn, animate out (death animation) on completion
@@ -150,6 +175,8 @@ Events: `permission` (`requestId`, `tool`, `summary`, `detail`, `truncatedLines`
 {
   "theme": "dark" | "light",
   "panelHeight": 300-1000,
+  "notifyDone": true,
+  "notifyFail": true,
   "permissionMode": "default" | "acceptEdits" | "plan" | "bypassPermissions",
   "windowPos": { x, y },
   "summonDesigns": { "<lower-case name>": { /* same shape as heroDesign */ } },
@@ -265,6 +292,9 @@ EOF
 | `main/command-catalog.js` | Lists agents plus Claude's own commands (built-ins, skills, custom commands) for the "/" popup |
 | `main/frontmatter.js` | Reads name / description / argument-hint from a markdown header |
 | `main/settings.js` | State persistence, workspace/agent data |
+| `main/notify.js` | Pure core of the notifications: labels, durations, fixed failure phrases, per-run trackers, the burst notifier, the spam limiter, `coerceFlag`; no electron import, `tools/check-notify.mjs` tests it |
+| `renderer/hooks/useNotifications.ts` | Reports what is on screen to main, shows main's text (bubble or toast), handles the click-to-open |
+| `renderer/components/common/NotifyCue.tsx` | The small toast shown in the open panel (plain text, Show and dismiss) |
 | `main/write-schedule.js` | Pure delay rule for settings.json writes (2 s debounce, 10 s max wait); `tools/check-write-schedule.mjs` tests it |
 | `main/capped-text.js` | Pure head + tail text buffer for Claude's stderr; `tools/check-capped.mjs` tests it |
 | `main/preload.js` | Secure IPC bridge (`window.bar`), subscriptions return unsubscribe |
