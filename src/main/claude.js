@@ -141,7 +141,7 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode 
     if (!handle.running) return;
     emit({ type: 'permission-mode', mode: next, ok: false, errorCode });
     if (permissions.isTightening(mode, next)) {
-      emit({ type: 'error', message: `Could not apply ${MODE_LABELS[next] || next} to the running Claude, so the run was stopped. Send your message again.` });
+      emit({ type: 'error', errorCode: 'mode-switch', message: `Could not apply ${MODE_LABELS[next] || next} to the running Claude, so the run was stopped. Send your message again.` });
       handle.cancel();
     }
   };
@@ -225,7 +225,7 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode 
   try {
     child = spawn(bin, args, { cwd, env: childEnv(), shell: isWin });
   } catch (err) {
-    emit({ type: 'error', message: `Could not start Claude: ${err.message}` });
+    emit({ type: 'error', errorCode: 'start', message: `Could not start Claude: ${err.message}` });
     finish(-1);
     return handle;
   }
@@ -272,7 +272,7 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode 
     const hint = err.code === 'ENOENT'
       ? ' Is Claude Code installed? Set CLAUDE_BIN to its path if it lives somewhere unusual.'
       : '';
-    emit({ type: 'error', message: `${err.message}.${hint}` });
+    emit({ type: 'error', errorCode: err.code === 'ENOENT' ? 'not-found' : 'start', message: `${err.message}.${hint}` });
     // Spawn failures don't always produce 'close'.
     if (child.pid === undefined) finish(-1);
   });
@@ -283,7 +283,7 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode 
       // A Claude that does not know the host flags says so before it starts any session.
       const unsupported = host && !sawSession && /unknown option|invalid.*--permission|--permission-prompt-tool/i.test(err);
       if (unsupported) hostSupportedFlag = false;
-      emit({ type: 'error', message: err.trim() + (unsupported ? HOST_UNSUPPORTED_HINT : '') });
+      emit({ type: 'error', ...(unsupported ? { errorCode: 'host-unsupported' } : {}), message: err.trim() + (unsupported ? HOST_UNSUPPORTED_HINT : '') });
     }
     finish(code);
   });

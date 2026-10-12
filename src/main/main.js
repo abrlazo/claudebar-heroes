@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const {
-  app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, dialog, globalShortcut,
+  app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, dialog, globalShortcut, Notification,
 } = require('electron');
 const settings = require('./settings');
 const claude = require('./claude');
@@ -10,6 +10,10 @@ const agentDefinitions = require('./agent-definitions');
 const commandCatalog = require('./command-catalog');
 const heroDesign = require('./hero-design');
 const { DRAWER_EXTRA, chooseDrawerMode, windowRect } = require('./drawer-layout');
+const notify = require('./notify');
+
+// Windows shows toasts only for an app with an AppUserModelId.
+if (process.platform === 'win32') app.setAppUserModelId('com.claudebar.heroes');
 
 // The window is a transparent, frameless box that holds the hero strip. It
 // can be dragged anywhere (even over the taskbar) and remembers its spot.
@@ -189,6 +193,114 @@ function createTray() {
   tray.setContextMenu(menu);
 }
 
+// ----- notifications: "work finished" / "something failed" -----
+// Main decides (notify.js is the pure core) from the events it already sees; the renderer only shows the text main built
+// (the hero bubble, or a small toast when the panel is open) and never supplies any. Nothing here changes a run.
+const NOTIFY_TABS = ['project-chat', 'general-chat', 'settings'];
+let notifier = null;
+let notifyLimiter = null;
+let notifyView = { tab: null, wsId: null, agentId: null }; // what the renderer shows (reported by notify:view)
+let quitting = false;
+let nativeBroken = false;                                  // the OS refused a notification: only the in-app cue from now on
+const liveNotifications = new Set();                       // kept referenced until closed, or macOS clicks are lost
+let questTracker = null;
+const agentTrackers = new Map();                           // agentId -> tracker of the process that is running now
+let lastWriteNotice = 0;
+
+// Test seams (environment of the main process only, never settings or IPC; bad values are ignored).
+const envNumber = (name, min) => {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= min ? n : undefined;
+};
+
+// CBH_NOTIFY_FOCUS=1 / 0 (test seam, main's environment only) fixes the answer: the real focus depends on the desktop the test runs on.
+const windowFocused = () => (process.env.CBH_NOTIFY_FOCUS === '1' ? true : process.env.CBH_NOTIFY_FOCUS === '0' ? false : !!win && !win.isDestroyed() && win.isFocused());
+
+function showFromNotification(target) {
+  if (!win || win.isDestroyed()) return;
+  if (!win.isVisible()) win.showInactive();
+  win.focus();
+  win.webContents.send('notify:open', { wsId: target?.wsId ?? null, agentId: target?.agentId ?? null });
+}
+
+// The OS notification. True when one was (or, with the log seam, would have been) shown.
+function showNative(note) {
+  const logFile = process.env.CBH_NOTIFY_LOG;
+  if (logFile) {
+    try {
+      fs.appendFileSync(logFile, `${JSON.stringify({ at: Date.now(), kind: note.kind, title: note.title, body: note.body, short: note.short, count: note.count, target: note.target })}\n`);
+      return true;
+    } catch { return false; }
+  }
+  if (nativeBroken || !Notification.isSupported()) return false;
+  try {
+    const n = new Notification({ title: note.title, body: note.body || '', silent: true });
+    liveNotifications.add(n);
+    n.on('click', () => { liveNotifications.delete(n); showFromNotification(note.target); });
+    n.on('close', () => liveNotifications.delete(n));
+    n.on('failed', () => { liveNotifications.delete(n); nativeBroken = true; });
+    n.show();
+    return true;
+  } catch {
+    nativeBroken = true;
+    return false;
+  }
+}
+
+// Always the in-app cue; the OS notification only when `native` (the user cannot see the panel anyway).
+function deliverNotification(note) {
+  if (quitting) return false;
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('notify:show', { kind: note.kind, title: note.title, text: note.short, target: note.target ? { wsId: note.target.wsId, agentId: note.target.agentId } : null });
+  }
+  return note.native ? showNative(note) : false;
+}
+
+// Is the user looking at this very chat right now?
+function watchingTarget(target) {
+  if (!panelOpen || !windowFocused() || notifyView.tab !== 'project-chat') return false;
+  return notifyView.wsId === target.wsId && (notifyView.agentId ?? null) === (target.agentId ?? null);
+}
+
+function setupNotifier() {
+  notifyLimiter = notify.createLimiter({ max: envNumber('CBH_NOTIFY_MAX_PER_MIN', 1), dedupeMs: envNumber('CBH_NOTIFY_DEDUPE_MS', 0) });
+  if (process.env.CBH_NOTIFY_OFF === '1') return; // the simulations: no tracking, no cues, nothing native
+  notifier = notify.createNotifier({
+    minRunMs: envNumber('CBH_NOTIFY_MIN_MS', 0),
+    quietMs: envNumber('CBH_NOTIFY_QUIET_MS', 100),
+    getFlags: () => ({ done: settings.get().notifyDone !== false, fail: settings.get().notifyFail !== false }),
+    isBusy: () => (mainHandle?.running ? 1 : 0) + agents.getActiveAgentCount() > 0,
+    watching: watchingTarget,
+    canNative: () => !(panelOpen && windowFocused()),
+    limiter: notifyLimiter,
+    deliver: deliverNotification,
+  });
+  // A failed settings write is worth a notification, at most once per 10 minutes (and never while quitting).
+  settings.onWriteError(() => {
+    if (quitting || !notifier || Date.now() - lastWriteNotice < 10 * 60 * 1000) return;
+    lastWriteNotice = Date.now();
+    notifier.add(notify.systemFailure('Settings', 'settings', Date.now()));
+  });
+}
+
+// Feeds one process's events to its tracker; it only observes and never throws into the run.
+function observeRun(tracker, event) {
+  if (!notifier || quitting) return;
+  try {
+    const early = tracker.event(event);
+    if (early) notifier.add(early);
+    if (event.type === 'end') notifier.add(tracker.outcome());
+  } catch { /* notifications must never break a run */ }
+}
+function observeAgent(tracker, agentId, event) {
+  if (!notifier) return;
+  if (event.type === 'start') agentTrackers.set(agentId, tracker);
+  observeRun(tracker, event);
+  if (event.type === 'end' && agentTrackers.get(agentId) === tracker) agentTrackers.delete(agentId);
+}
+
 function toggleVisible() {
   if (!win) return;
   if (win.isVisible()) win.hide();
@@ -208,8 +320,8 @@ function registerIpc() {
   // those change only through the validated handlers below.
   ipcMain.handle('settings:set', (_e, patch) => {
     if (!patch || typeof patch !== 'object') return settings.get();
-    // archive lives in workspaces; permissionMode only changes through settings:update (validated, and applied to live runs)
-    const { workspaces, summonDesigns, migrations, archive, permissionMode, ...rest } = patch;
+    // archive lives in workspaces; the notify flags only change through settings:update (booleans only); permissionMode only changes through settings:update (validated, and applied to live runs)
+    const { workspaces, summonDesigns, migrations, archive, permissionMode, notifyDone, notifyFail, ...rest } = patch;
     return settings.set(rest);
   });
 
@@ -389,10 +501,13 @@ function registerIpc() {
     }
     runningWsId = ws.id;
     const permissionMode = settings.get().permissionMode;
+    const tracker = notify.createTracker({ kind: 'quest', wsId: ws.id, label: ws.name });
+    questTracker = tracker;
     mainHandle = claude.run(
       // Host mode always: Claude asks through the app (permission events) and the footer mode can change mid-run.
       { prompt, cwd: ws.path, sessionId: ws.sessionId, permissionMode, model, promptMode: claude.projectPromptMode(permissionMode) },
       (event) => {
+        observeRun(tracker, event);
         // Everything is saved to the workspace that started the run.
         if (event.sessionId) settings.updateWorkspace(ws.id, { sessionId: event.sessionId });
         if (event.type === 'result' && event.contextWindow) {
@@ -409,7 +524,11 @@ function registerIpc() {
     );
   });
 
-  ipcMain.on('claude:cancel', () => mainHandle?.cancel());
+  // Only the user's own Stop is silent (the fail-closed cancel inside claude.js is a failure).
+  ipcMain.on('claude:cancel', () => {
+    if (mainHandle?.running) questTracker?.markStopped();
+    mainHandle?.cancel();
+  });
 
   // The answer to a permission card. Everything from the renderer is checked here; the tool input is never read
   // from it: the run answers from the copy it stored when Claude asked, and only for a request it holds as pending.
@@ -465,6 +584,8 @@ function registerIpc() {
     const previousMode = settings.get().permissionMode;
     if (PERMISSION_MODES.includes(patch.permissionMode)) allowed.permissionMode = patch.permissionMode;
     if (patch.theme === 'dark' || patch.theme === 'light') allowed.theme = patch.theme;
+    if (typeof patch.notifyDone === 'boolean') allowed.notifyDone = patch.notifyDone;
+    if (typeof patch.notifyFail === 'boolean') allowed.notifyFail = patch.notifyFail;
     const saved = Object.keys(allowed).length ? settings.set(allowed) : settings.get();
     // The footer mode also applies to the processes that are working right now (main is the only source of the mode).
     if (allowed.permissionMode && allowed.permissionMode !== previousMode) {
@@ -518,6 +639,7 @@ function registerIpc() {
 
     const agent = settings.newAgent(name, 0);
     settings.addAgent(wsId, agent);
+    const tracker = notify.createTracker({ kind: 'agent', wsId, agentId: agent.id, label: name });
     agents.spawn({
       wsId,
       agentId: agent.id,
@@ -527,6 +649,7 @@ function registerIpc() {
       cwd: ws.path,
       permissionMode: settings.get().permissionMode,
     }, (event) => {
+      observeAgent(tracker, agent.id, event);
       win?.webContents.send('agent:event', event);
     });
     return { agent, definitionName: definition.name };
@@ -544,13 +667,21 @@ function registerIpc() {
       emit({ agentId, type: 'error', message: `Agent definition "${definitionName}" is gone from .claude/agents.` });
       return;
     }
+    // The saved record is gone a few seconds after a run, so the label comes from the definition.
+    const record = (ws.agents || []).find((a) => a.id === agentId);
+    const tracker = notify.createTracker({ kind: 'agent', wsId, agentId, label: record?.name || definition?.name || 'Agent' });
     agents.spawn({
       wsId, agentId, agentName: 'Agent', definitionName: definition?.name ?? null, prompt, cwd: ws.path,
       permissionMode: settings.get().permissionMode, sessionId,
-    }, emit);
+    }, (event) => {
+      observeAgent(tracker, agentId, event);
+      emit(event);
+    });
   });
 
   ipcMain.handle('agents:cancel', (_e, { wsId, agentId }) => {
+    // Stop and the tab's x both come here: a running agent that is stopped does not notify.
+    if (agents.isRunning(agentId)) agentTrackers.get(agentId)?.markStopped();
     agents.cancelAgent(agentId);
     return settings.removeAgent(wsId, agentId);
   });
@@ -596,6 +727,23 @@ function registerIpc() {
     }
   });
 
+  // What the user is looking at, so main can tell a chat on screen from one that needs a notification.
+  ipcMain.on('notify:view', (_e, view) => {
+    if (!view || typeof view !== 'object' || Array.isArray(view)) return;
+    const id = (v) => (typeof v === 'string' && v.length > 0 && v.length <= 100 ? v : null);
+    notifyView = { tab: NOTIFY_TABS.includes(view.tab) ? view.tab : null, wsId: id(view.wsId), agentId: id(view.agentId) };
+  });
+
+  // The Test button: fixed text, same spam limit, ignores minimum length and "watching" (and the repeat filter).
+  ipcMain.handle('notify:test', () => {
+    const text = 'Notifications are on';
+    const native = deliverNotification({
+      kind: 'test', title: text, body: 'This is how Claudebar Heroes tells you when work finishes or fails.', short: text,
+      target: null, count: 1, native: notifyLimiter.allow(text, { dedupe: false }),
+    });
+    return { native };
+  });
+
   ipcMain.on('app:quit', () => app.quit());
 
   ipcMain.on('app:restart', () => {
@@ -608,6 +756,7 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock?.hide();
 
   panelHeight = settings.get().panelHeight ?? DEFAULT_PANEL_HEIGHT;
+  setupNotifier();
   registerIpc();
   createWindow();
   createTray();
@@ -622,6 +771,8 @@ app.whenReady().then(() => {
 });
 
 app.on('will-quit', () => {
+  quitting = true; // runs cancelled below must not notify
+  notifier?.dispose();
   globalShortcut.unregisterAll();
   mainHandle?.cancel();
   generalChatHandle?.cancel();

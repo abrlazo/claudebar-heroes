@@ -103,6 +103,9 @@ export interface Settings {
   activeId: string | null;
   theme: Theme;
   panelHeight: number;
+  /** Notify (OS notification, or an in-app cue) when work finishes / when something fails. Booleans only. */
+  notifyDone: boolean;
+  notifyFail: boolean;
   /** One-time data migrations applied by the main process (read-only here). */
   migrations?: Record<string, boolean>;
 }
@@ -196,6 +199,7 @@ export interface ClaudeEvent {
    */
   mode?: PermissionMode;
   ok?: boolean;
+  /** 'permission-mode': why a switch failed. 'error': a fixed code main adds for the notification wording (not-found, start, host-unsupported, mode-switch). */
   errorCode?: string;
 }
 
@@ -214,6 +218,20 @@ export interface PermissionRequest {
   path: string;
   viaSubagent: boolean;
   expiresAt: number;
+}
+
+/** Where a notification leads (built by main from its own records). */
+export interface NotifyTarget {
+  wsId: string | null;
+  agentId: string | null;
+}
+
+/** A notification as main built it: plain text only. `title` is the short headline, `text` the full sentence. */
+export interface NotifyEvent {
+  kind: 'done' | 'failed' | 'mixed' | 'test';
+  title: string;
+  text: string;
+  target: NotifyTarget | null;
 }
 
 export interface AgentEvent extends ClaudeEvent {
@@ -299,6 +317,13 @@ export interface Bar {
   onPanelSide(cb: (side: 'above' | 'below') => void): Unsubscribe;
   onDrawerMode(cb: (mode: DrawerMode) => void): Unsubscribe;
   addMessage(wsId: string, message: ChatMessage): void;
+
+  /** Tells main what is on screen (tab and chat) so it does not notify about a chat you are reading. */
+  setNotifyView(view: { tab: string; wsId: string | null; agentId: string | null }): void;
+  /** Sends a test notification; `native` is whether the system one was shown (false: unavailable, blocked or rate-limited). */
+  testNotify(): Promise<{ native: boolean }>;
+  onNotify(cb: (note: NotifyEvent) => void): Unsubscribe;
+  onNotifyOpen(cb: (target: NotifyTarget) => void): Unsubscribe;
 }
 
 declare global {
