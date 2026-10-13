@@ -149,3 +149,32 @@ export function parseMarkdown(text: string): Block[] {
   }
   return blocks;
 }
+
+const FENCE_CLOSE = /^\s*```\s*$/;
+
+/**
+ * For text that only grows (a streaming answer): returns where the "settled" part ends, i.e. just after the
+ * last blank line that is outside a code fence. Every block ends at such a line, so
+ * `parseMarkdown(text)` equals `parseMarkdown(text.slice(0, cut))` followed by `parseMarkdown(text.slice(cut))`,
+ * and the settled part can be parsed once instead of every frame. Each call only scans the lines that arrived
+ * since the last one; text that does not continue the previous one starts over.
+ */
+export function createStreamSplitter(): (text: string) => number {
+  let seen = '';     // the text scanned so far (up to `scanned`)
+  let scanned = 0;   // start of the first line not scanned yet (always just after a '\n')
+  let inFence = false;
+  let cut = 0;
+  return (text: string): number => {
+    if (text.length < scanned || !text.startsWith(seen)) { scanned = 0; inFence = false; cut = 0; }
+    let nl: number;
+    while ((nl = text.indexOf('\n', scanned)) !== -1) {
+      const line = text.slice(scanned, nl);
+      if (inFence) { if (FENCE_CLOSE.test(line)) inFence = false; }
+      else if (FENCE.test(line)) inFence = true;
+      else if (!line.trim()) cut = nl + 1;
+      scanned = nl + 1;
+    }
+    seen = text.slice(0, scanned);
+    return cut;
+  };
+}

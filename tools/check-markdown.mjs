@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cbh-md-'));
 fs.writeFileSync(path.join(tmp, 'markdown.mjs'), stripTypeScriptTypes(fs.readFileSync(path.join(root, 'src/renderer/lib/markdown.ts'), 'utf8')));
-const { parseMarkdown, parseInline } = await import(pathToFileURL(path.join(tmp, 'markdown.mjs')).href);
+const { parseMarkdown, parseInline, createStreamSplitter } = await import(pathToFileURL(path.join(tmp, 'markdown.mjs')).href);
 fs.rmSync(tmp, { recursive: true, force: true });
 
 let failed = 0;
@@ -52,4 +52,29 @@ for (const [label, s] of [['a', 'a'.repeat(4000)], ['markers', '*_`~[**'.repeat(
   const ms = Date.now() - t;
   check(`4000+ char input "${label}" finishes`, ok && ms < 500, `${ms} ms`);
 }
+// Streaming: the settled prefix parsed once plus the tail must equal parsing the whole text, at every length.
+const streamDocs = {
+  mixed: '# Title\n\nSome **bold** text\nand more.\n\n- a\n- b\n  - c\n\n```js\nconst x = 1;\n\nconst y = 2;\n```\n\n> quote\n> more\n\n---\n\n1. one\n2. two\n\nend *em*',
+  unclosedFence: 'intro\n\n```\ncode\n\nstill code\n',
+  fenceInParagraph: 'text\n```\n\nin fence\n```\nafter\n\nlast',
+  crlf: 'a\r\n\r\nb\r\n```\r\n\r\n```\r\n\r\nc',
+  blanks: '\n\n\nx\n\n\n\ny\n',
+};
+for (const [label, doc] of Object.entries(streamDocs)) {
+  const split = createStreamSplitter();
+  let bad = -1;
+  for (let len = 0; len <= doc.length && bad < 0; len++) {
+    const text = doc.slice(0, len);
+    const cut = split(text);
+    if (J([...parseMarkdown(text.slice(0, cut)), ...parseMarkdown(text.slice(cut))]) !== J(parseMarkdown(text))) bad = len;
+  }
+  check(`stream split "${label}" parses like the whole text at every length`, bad < 0, bad < 0 ? '' : `differs at ${bad}`);
+}
+{
+  const split = createStreamSplitter();
+  split('a\n\nb');
+  check('stream split starts over on a new text', split('xyz') === 0);
+  check('stream split finds the cut again after a reset', split('xyz\n\nq') === 5);
+}
+
 process.exit(failed ? 1 : 0);

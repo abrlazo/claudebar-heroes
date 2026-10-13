@@ -1,5 +1,5 @@
-import { memo, useMemo, type ReactNode } from 'react';
-import { parseMarkdown, type Block, type Inline, type ListBlock } from '../../lib/markdown';
+import { memo, useMemo, useState, type ReactNode } from 'react';
+import { createStreamSplitter, parseMarkdown, type Block, type Inline, type ListBlock } from '../../lib/markdown';
 
 // Maps parsed Markdown to React elements. Never uses innerHTML and never emits an href: links show their text with the URL as a tooltip.
 function inline(nodes: Inline[]): ReactNode[] {
@@ -43,3 +43,19 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
   const blocks = useMemo(() => parseMarkdown(text), [text]);
   return <>{blocks.map(block)}</>;
 });
+
+/**
+ * Markdown for text that is still streaming in. The settled part (up to the last blank line outside a code
+ * fence) is a separate memoised block that only re-parses when that boundary moves, so each frame parses just
+ * the tail instead of the whole answer. Renders the same DOM as <Markdown> (fragments add no nodes).
+ */
+export function StreamingMarkdown({ text }: { text: string }) {
+  const [split] = useState(createStreamSplitter);
+  const cut = split(text);
+  return (
+    <>
+      <Markdown text={text.slice(0, cut)} />
+      <Markdown text={text.slice(cut)} />
+    </>
+  );
+}

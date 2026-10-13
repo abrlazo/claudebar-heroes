@@ -7,6 +7,20 @@ import type { Hero, Workspace } from '../types';
 
 const heroes = new Map<string, Hero>();
 const portraits = new Map<string, string>();
+// Every summon or reroll makes a new key, so the caches are LRU-capped instead of growing for the whole session.
+const MAX_CACHED = 64;
+
+function cached<T>(map: Map<string, T>, key: string, make: () => T): T {
+  let v = map.get(key);
+  if (v !== undefined) {
+    map.delete(key); // most recently used goes last
+  } else {
+    v = make();
+    if (map.size >= MAX_CACHED) map.delete(map.keys().next().value as string);
+  }
+  map.set(key, v);
+  return v;
+}
 
 // A design that arrives after the seed changes the look, so it is part of the key.
 const cacheKey = (ws: Workspace) => (ws.heroDesign ? `${ws.heroSeed}#${ws.heroDesign.at}` : ws.heroSeed);
@@ -16,14 +30,10 @@ export function heroFor(ws: Workspace): Hero;
 export function heroFor(ws: Workspace | null): Hero | null;
 export function heroFor(ws: Workspace | null): Hero | null {
   if (!ws) return null;
-  const key = cacheKey(ws);
-  if (!heroes.has(key)) heroes.set(key, generateHero(ws.heroSeed, ws.heroDesign ?? undefined) as Hero);
-  return heroes.get(key) as Hero;
+  return cached(heroes, cacheKey(ws), () => generateHero(ws.heroSeed, ws.heroDesign ?? undefined) as Hero);
 }
 
 /** Portrait data URL for a workspace's hero. */
 export function portraitFor(ws: Workspace): string {
-  const key = cacheKey(ws);
-  if (!portraits.has(key)) portraits.set(key, heroPortrait(heroFor(ws)));
-  return portraits.get(key) as string;
+  return cached(portraits, cacheKey(ws), () => heroPortrait(heroFor(ws)));
 }
