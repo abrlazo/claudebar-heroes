@@ -15,6 +15,7 @@ import { useGeneralChat } from './hooks/useGeneralChat';
 import { usePanel } from './hooks/usePanel';
 import { useNotifications } from './hooks/useNotifications';
 import { useWorkspaceActions } from './hooks/useWorkspaceActions';
+import { useWindowVisibility } from './hooks/useWindowVisibility';
 import { useClickThrough } from './hooks/useClickThrough';
 import { useWindowDrag } from './hooks/useWindowDrag';
 import { usePanelResize } from './hooks/usePanelResize';
@@ -152,6 +153,8 @@ function AppShell() {
 
   const workspaceActions = useWorkspaceActions({ busy, say });
   useClickThrough();
+  const windowVisibility = useWindowVisibility(game, settings.minimizeTo);
+  const hide = { canHide: windowVisibility.canHide, onHide: windowVisibility.hide, to: windowVisibility.to, tray: windowVisibility.tray };
   const dragProps = useWindowDrag();
   const resizeProps = usePanelResize();
 
@@ -351,7 +354,7 @@ function AppShell() {
           model: projectModel, onModelChange: setProjectModel, onSend: sendProjectPrompt, onStop: stop,
         }}
         ask={{ chat: ask, model: askModel, onModelChange: setAskModel }}
-        inventory={{ ws, busy, actions: workspaceActions, onPickMap: pickMap }}
+        inventory={{ ws, busy, actions: workspaceActions, onPickMap: pickMap, hide }}
         notify={{ cue: notifications.cue, onShow: notifications.show, onDismiss: notifications.dismiss }}
       />
       <ArchiveDrawer
@@ -364,6 +367,7 @@ function AppShell() {
       />
       <Strip
         onTogglePanel={() => panel.toggle()}
+        hide={hide}
         stageProps={{
           refs, bubble, game, dragProps,
           hasWorkspace: !!ws,

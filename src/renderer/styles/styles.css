@@ -264,6 +264,18 @@ body.panel-below #panel { top: calc(var(--strip-h) + 8px); bottom: 0; }
   font-size: 18px;
 }
 
+/* Hide button above the chat button (only rendered when main has a tray icon to bring the app back). */
+.strip-buttons { display: flex; flex-direction: column; width: 44px; border-left: 2px solid var(--purple); }
+#strip .strip-buttons button { width: 100%; border: none; border-radius: 0; background: var(--ink-2); }
+.strip-buttons #toggle-panel { flex: 1; border-left: none; }
+#strip #hide-app { height: 22px; padding: 0; font-size: 16px; line-height: 1; color: var(--muted); border-bottom: 1px solid var(--purple); }
+#strip #hide-app:hover { color: var(--purple); }
+#hide-app:focus-visible, #toggle-panel:focus-visible { outline: 2px solid var(--purple); outline-offset: -3px; }
+.hide-app-row { margin: 4px 0 8px; }
+.hide-app-row label { display: block; margin-bottom: 6px; font-size: 11px; }
+.hide-app-row select { width: 100%; margin-bottom: 8px; }
+.hide-app-row p { font-size: 11px; margin: 4px 0 0; }
+
 #ask-tab {
   padding: 4px 12px;
   font-size: 12px;

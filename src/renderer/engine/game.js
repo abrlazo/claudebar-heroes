@@ -83,6 +83,8 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
   const sprite = createSprite(heroCanvas);
   const aura = createAura(auraCanvas);
   let frameId = 0;
+  let suspended = false; // the window is hidden: no frames until resume()
+  let destroyed = false;
   const timers = new Set();
   const later = (fn, ms) => {
     const id = setTimeout(() => { timers.delete(id); fn(); }, ms);
@@ -474,6 +476,8 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
   return {
     /** Stops the loop and removes every node the engine added to the stage. */
     destroy() {
+      destroyed = true;
+      suspended = true;
       cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
       timers.forEach(clearTimeout);
@@ -503,6 +507,28 @@ export function createGame({ stage, heroEl, sceneCanvas, heroCanvas, auraCanvas,
         state.allies = allies.map((allyHero, i) => spawnAlly(allyHero, i, allies.length));
       }
     },
+
+    /**
+     * The app window is hidden: stop the frame loop (scene, sprites, enemies, kills, combo, boss progress all pause).
+     * Events keep being handled elsewhere (XP comes from token events). Idempotent.
+     */
+    suspend() {
+      if (suspended) return;
+      suspended = true;
+      cancelAnimationFrame(frameId);
+      stage.dataset.loop = 'paused';
+    },
+
+    /** Back from hidden: continue from "now" (no big time jump) and restart the loop. Idempotent. */
+    resume() {
+      if (!suspended || destroyed) return;
+      suspended = false;
+      state.lastTime = performance.now();
+      stage.dataset.loop = 'running';
+      frameId = requestAnimationFrame(tick);
+    },
+
+    get suspended() { return suspended; },
 
     wake() {
       if (state.awake || !state.hero) return;

@@ -1,0 +1,85 @@
+/* The floating bubble: a 56 px square window, a 48 px disc in the middle (room for the hover scale and the badge). */
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#bubble {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  -webkit-user-drag: none;
+  touch-action: none;
+}
+
+#logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #ea7e66; /* the disc; the pixel sword is drawn on it by the SVG */
+  display: block;
+  pointer-events: none;
+  transition: transform 0.12s ease-out;
+  /* dark theme: a soft light rim so it reads on any desktop */
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.55), 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+body[data-theme="light"] #logo {
+  /* light theme: a darker outline */
+  box-shadow: 0 0 0 1.5px rgba(26, 26, 46, 0.75), 0 2px 5px rgba(0, 0, 0, 0.25);
+}
+#bubble:hover #logo { transform: scale(1.06); }
+#bubble:active #logo { transform: scale(0.94); }
+
+/* the working ring (running): a thin arc around the disc */
+#ring {
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  pointer-events: none;
+}
+#bubble[data-badge="running"] #ring {
+  border-top-color: #667eea;
+  border-right-color: rgba(102, 126, 234, 0.45);
+}
+body[data-theme="light"] #bubble[data-badge="running"] #ring { border-top-color: #4a5fd0; border-right-color: rgba(74, 95, 208, 0.45); }
+
+/* the badge: top right, with a white ring */
+#badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  box-sizing: border-box;
+  background: #667eea;
+  box-shadow: 0 0 0 2px #fff;
+  color: #fff;
+  font: 700 11px/18px ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  text-align: center;
+  pointer-events: none;
+}
+#badge[hidden] { display: none; }
+#bubble[data-badge="ask"] #badge { background: #f5a623; color: #1a1a2e; }
+#bubble[data-badge="failed"] #badge { background: #e5484d; }
+#bubble[data-badge="done"] #badge { background: #3fb950; color: #0b2a12; }
+
+@media (prefers-reduced-motion: no-preference) {
+  #bubble[data-badge="running"] #ring { animation: bubble-spin 1.4s linear infinite; }
+  #bubble[data-badge="ask"] #badge { animation: bubble-pulse 1.2s ease-in-out infinite; }
+}
+@keyframes bubble-spin { to { transform: rotate(360deg); } }
+@keyframes bubble-pulse { 50% { transform: scale(1.18); } }
+@media (prefers-reduced-motion: reduce) {
+  #logo { transition: none; }
+}
