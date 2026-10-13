@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const permissions = require('./permissions');
 const { createCapped } = require('./capped-text');
+const { createLineReader } = require('./line-reader');
 
 const isWin = process.platform === 'win32';
 
@@ -238,34 +239,30 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode 
   if (host) writeLine(permissions.buildUserLine(prompt));
   else child.stdin.end(prompt);
 
-  let buffer = '';
   const stderr = createCapped();
   const state = { streamedText: false, subagents: new Map() };
   let sawSession = false;
 
-  child.stdout.on('data', (chunk) => {
-    buffer += chunk.toString();
-    let nl;
-    while ((nl = buffer.indexOf('\n')) !== -1) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (!line) continue;
-      try {
-        const msg = JSON.parse(line);
-        if (msg.type === 'system' && msg.subtype === 'init') sawSession = true;
-        const modeAck = host && msg.type === 'control_response' ? permissions.parseModeResponse(msg) : null;
-        if (modeAck) onModeResponse(modeAck);
-        else if (host && (msg.type === 'control_request' || msg.type === 'control_cancel_request')) handleControl(msg, { broker, emit, writeLine, getMode: () => mode });
-        else handleMessage(msg, emit, state);
-        if (host && msg.type === 'result') { dropPending(); endInput(); }
-      } catch {
-        // Ignore non-JSON lines.
-      }
+  // Decoded as UTF-8 by the stream, so a multi-byte character split across two chunks is not garbled.
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  const lines = createLineReader((line) => {
+    try {
+      const msg = JSON.parse(line);
+      if (msg.type === 'system' && msg.subtype === 'init') sawSession = true;
+      const modeAck = host && msg.type === 'control_response' ? permissions.parseModeResponse(msg) : null;
+      if (modeAck) onModeResponse(modeAck);
+      else if (host && (msg.type === 'control_request' || msg.type === 'control_cancel_request')) handleControl(msg, { broker, emit, writeLine, getMode: () => mode });
+      else handleMessage(msg, emit, state);
+      if (host && msg.type === 'result') { dropPending(); endInput(); }
+    } catch {
+      // Ignore non-JSON lines.
     }
   });
+  child.stdout.on('data', (chunk) => lines.push(chunk));
 
   child.stderr.on('data', (chunk) => {
-    stderr.add(chunk.toString());
+    stderr.add(chunk);
   });
 
   child.on('error', (err) => {
@@ -479,7 +476,6 @@ function listCommands(cwd, timeoutMs = 6000) {
   return new Promise((resolve) => {
     let child;
     let settled = false;
-    let buffer = '';
     const done = (value) => {
       if (settled) return;
       settled = true;
@@ -504,25 +500,20 @@ function listCommands(cwd, timeoutMs = 6000) {
     child.on('error', () => done(null));
     child.on('close', () => done(null));
     child.stderr.resume(); // drain it so a chatty child can't block
-    child.stdout.on('data', (chunk) => {
-      buffer += chunk.toString();
-      let nl;
-      while ((nl = buffer.indexOf('\n')) !== -1) {
-        const line = buffer.slice(0, nl).trim();
-        buffer = buffer.slice(nl + 1);
-        if (!line) continue;
-        try {
-          const msg = JSON.parse(line);
-          if (msg.type === 'control_response' && msg.response?.request_id === 'cmd-list') {
-            const commands = msg.response?.response?.commands;
-            done(Array.isArray(commands)
-              ? commands.map((c) => ({ name: c.name, description: c.description || '', argumentHint: c.argumentHint || '' }))
-              : null);
-            return;
-          }
-        } catch { /* not JSON */ }
-      }
+    child.stdout.setEncoding('utf8');
+    const lines = createLineReader((line) => {
+      if (settled) return;
+      try {
+        const msg = JSON.parse(line);
+        if (msg.type === 'control_response' && msg.response?.request_id === 'cmd-list') {
+          const commands = msg.response?.response?.commands;
+          done(Array.isArray(commands)
+            ? commands.map((c) => ({ name: c.name, description: c.description || '', argumentHint: c.argumentHint || '' }))
+            : null);
+        }
+      } catch { /* not JSON */ }
     });
+    child.stdout.on('data', (chunk) => lines.push(chunk));
     child.stdin.on('error', () => done(null));
     child.stdin.write(`${JSON.stringify({ type: 'control_request', request_id: 'cmd-list', request: { subtype: 'initialize' } })}\n`);
   });
@@ -564,8 +555,9 @@ function ask({ prompt, cwd, model, timeoutMs = 25000 }) {
     }
     child.on('error', (err) => done({ ok: false, error: err.code === 'ENOENT' ? 'not-found' : 'failed' }));
     child.stderr.resume();
+    child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
-      out += chunk.toString();
+      out += chunk;
       if (out.length > ASK_MAX_OUTPUT) done({ ok: false, error: 'too-large' });
     });
     child.on('close', () => {
