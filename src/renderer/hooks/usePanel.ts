@@ -32,11 +32,12 @@ export function usePanel(): PanelState {
   const openRef = useRef(false);
   const drawerRef = useRef(false);
   const drawerBusy = useRef(false);
+  const hiddenRef = useRef(false); // the window is hidden (main refuses to open the panel then)
 
   const toggleDrawer = useCallback(async (force?: boolean) => {
     const next = force ?? !drawerRef.current;
     if (next === drawerRef.current || drawerBusy.current) return;
-    if (next && !openRef.current) return;
+    if (next && (!openRef.current || hiddenRef.current)) return;
     drawerBusy.current = true;
     try {
       if (next) {
@@ -62,9 +63,12 @@ export function usePanel(): PanelState {
     const next = force ?? !openRef.current;
     if (next === openRef.current) return;
     if (next) {
+      if (hiddenRef.current) return;
       // Lay out for the side the panel will open on before the window grows.
       setSide(await bar.panelSide());
       await bar.setPanelOpen(true);
+      // Hidden meanwhile: main refused, so do not show a panel the window cannot hold.
+      if (hiddenRef.current) return;
       openRef.current = true;
       setOpen(true);
       bar.focus();
@@ -79,6 +83,11 @@ export function usePanel(): PanelState {
   }, []);
 
   useBridgeEvent<void>(bar.onTogglePanel, () => { toggle(); });
+  // Hiding the app closes the panel (and the drawer with it) first; main does the same for the window.
+  useBridgeEvent(bar.onWindowVisible, ({ visible }) => {
+    hiddenRef.current = !visible;
+    if (!visible) { void toggle(false); }
+  });
   useBridgeEvent(bar.onPanelSide, setSide);
   // After a drag the strip may have moved where the drawer fits on another side.
   useBridgeEvent(bar.onDrawerMode, (m: DrawerMode) => { if (drawerRef.current) setMode(m); });

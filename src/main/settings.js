@@ -7,10 +7,14 @@ const { designFor, rememberDesign } = require('./hero-design');
 const { MAX_ARCHIVED, cleanArchived, cleanArchive } = require('./archive');
 const { nextDelay } = require('./write-schedule');
 const { coerceFlag } = require('./notify');
+const { coerceMode } = require('./window-visibility');
+const { cleanBubblePos } = require('./bubble-geometry');
 
 const DEFAULTS = {
   permissionMode: 'default',
   windowPos: null,
+  minimizeTo: 'bubble', // where a hidden app goes: 'bubble' (floating button) or 'tray' (see window-visibility.js)
+  bubblePos: null, // where the bubble was dragged to (written by main only, never by the renderer)
   workspaces: [],
   activeId: null,
   theme: 'dark',
@@ -94,6 +98,8 @@ function load() {
   const s = { ...DEFAULTS, ...raw };
   s.notifyDone = coerceFlag(raw.notifyDone);
   s.notifyFail = coerceFlag(raw.notifyFail);
+  s.minimizeTo = coerceMode(raw.minimizeTo);
+  s.bubblePos = cleanBubblePos(raw.bubblePos);
 
   // Older settings had a single working folder; turn it into a workspace
   // (unless it was just the home-folder default).

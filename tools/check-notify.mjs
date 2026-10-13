@@ -243,6 +243,44 @@ const failItem = (over = {}) => item({ type: 'failed', startedAt: 0, endedAt: 80
   check('several successes list up to three names', many.title === '5 tasks finished' && many.body === 't1, t2, t3 and 2 more');
 }
 
+// ----- permission note (app hidden) -----
+{
+  const n = N.permissionNote({ label: 'version-controller', target: { wsId: 'w1', agentId: 'a1' } });
+  check('a permission note has fixed text', n.title === 'version-controller needs your OK' && n.body === 'Open Claudebar Heroes to allow or deny.' && n.kind === 'permission' && n.count === 1);
+  check('its target is copied', n.target.wsId === 'w1' && n.target.agentId === 'a1');
+  const dirty = N.permissionNote({ label: '/Users/me/secret\u202e rm -rf x'.repeat(5), target: { wsId: 'w' } });
+  check('a path-like or hostile label is cleaned and capped', !/\/Users|\u202e/.test(JSON.stringify(dirty)) && dirty.title.length <= 60);
+  check('no label falls back, no target gives null', N.permissionNote({}).title === 'Claude needs your OK' && N.permissionNote({}).target === null && N.permissionNote().kind === 'permission');
+  const tr = N.createTracker({ kind: 'agent', wsId: 'w1', agentId: 'a1', label: 'gitama' });
+  check('a tracker builds the note for its own run', tr.permissionNote().title === 'gitama needs your OK' && tr.permissionNote().target.agentId === 'a1');
+  check('a tracker counts the requests that wait, resolved ones and the end clear them', (() => {
+    const t = N.createTracker({ kind: 'quest', wsId: 'w', label: 'x' });
+    t.event({ type: 'start' }); t.event({ type: 'permission', requestId: 'a' }); t.event({ type: 'permission', requestId: 'b' });
+    const two = t.waiting() === 2;
+    t.event({ type: 'permission-resolved', requestId: 'a', how: 'allowed' });
+    const one = t.waiting() === 1;
+    t.event({ type: 'end', code: 0 });
+    return two && one && t.waiting() === 0;
+  })());
+  check('a permission event never ends or fails a run', (() => { tr.event({ type: 'start' }); return tr.event({ type: 'permission', requestId: 'x', tool: 'Bash', detail: 'rm -rf /' }) === null && !tr.ended(); })());
+}
+
+// ----- running() and the counts the floating bubble latches -----
+{
+  const t = N.createTracker({ kind: 'quest', wsId: 'w', label: 'x' });
+  check('running(): false before start, true after, false after the end', (() => {
+    const a = t.running();
+    t.event({ type: 'start' });
+    const b = t.running();
+    t.event({ type: 'end', code: 0 });
+    return a === false && b === true && t.running() === false;
+  })());
+  const item = (type, label) => ({ type, label, startedAt: 0, endedAt: 1000, reason: type === 'failed' ? { code: 'x', phrase: 'p' } : null, target: null });
+  const one = N.describe([item('done', 'a')]);
+  const mixed = N.describe([item('done', 'a'), item('failed', 'b'), item('failed', 'c')]);
+  check('describe() adds counts and keeps kind', one.counts.done === 1 && one.counts.failed === 0 && one.kind === 'done' && mixed.counts.done === 1 && mixed.counts.failed === 2 && mixed.kind === 'mixed');
+}
+
 // ----- limiter -----
 {
   let t = 0;

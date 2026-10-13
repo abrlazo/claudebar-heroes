@@ -96,6 +96,7 @@ function createTracker({ kind, wsId = null, agentId = null, label, now = Date.no
   let stopped = false;
   let told = false;      // a permission timeout was already reported
   let ended = false;
+  const waiting = new Set(); // permission requests still waiting for the user (ids only)
 
   const failure = (reason, at) => ({ type: 'failed', label: name, startedAt: startedAt ?? at, endedAt: at, reason, target: { ...target } });
 
@@ -104,6 +105,9 @@ function createTracker({ kind, wsId = null, agentId = null, label, now = Date.no
     event(ev) {
       if (!ev || typeof ev !== 'object') return null;
       if (ev.type === 'start') { if (startedAt === null) startedAt = now(); return null; }
+      if (ev.type === 'permission' && typeof ev.requestId === 'string') waiting.add(ev.requestId);
+      else if (ev.type === 'permission-resolved' && typeof ev.requestId === 'string') waiting.delete(ev.requestId);
+      else if (ev.type === 'end') waiting.clear();
       if (startedAt === null || ended) return null; // nothing counts before the process started (e.g. "already running")
       if (ev.type === 'error') {
         if (!first) first = { code: typeof ev.errorCode === 'string' ? ev.errorCode : undefined, message: typeof ev.message === 'string' ? ev.message : '' };
@@ -121,9 +125,15 @@ function createTracker({ kind, wsId = null, agentId = null, label, now = Date.no
       }
       return null;
     },
+    /** How many permission requests of this run wait for the user right now. */
+    waiting: () => waiting.size,
+    /** The text for "this run is waiting for your OK" (used only while the app is hidden). */
+    permissionNote: () => permissionNote({ label: name, target }),
     /** The user pressed Stop (or closed the tab): the run's end is silent. */
     markStopped() { stopped = true; },
     ended: () => ended,
+    /** The process started and has not ended (what the floating bubble shows as "working"). */
+    running: () => startedAt !== null && !ended,
     /** What happened, once the run has ended. */
     outcome() {
       const at = endedAt ?? now();
@@ -147,6 +157,22 @@ function systemFailure(label, code, at) {
 
 // ----- the words -----
 
+/**
+ * A permission request while the window is hidden. FIXED text: only the cleaned label is shown, never the tool, the
+ * command or any path. `native` is decided by the caller (spam limit); the click opens the window on that chat.
+ */
+function permissionNote({ label, target } = {}) {
+  const name = cleanLabel(label, 'Claude');
+  return {
+    kind: 'permission',
+    title: `${name} needs your OK`,
+    body: 'Open Claudebar Heroes to allow or deny.',
+    short: `${name} needs your OK`,
+    count: 1,
+    target: target && typeof target === 'object' ? { wsId: target.wsId ?? null, agentId: target.agentId ?? null } : null,
+  };
+}
+
 const failureText = (item) => (item.system ? `${item.label} ${item.reason.phrase}` : `${item.label} failed: ${item.reason.phrase}`);
 
 /**
@@ -162,6 +188,7 @@ function describe(items) {
     return list.length > 3 ? `${shown} and ${list.length - 3} more` : shown;
   };
   const target = (failed[0] || items[items.length - 1] || {}).target || null;
+  const counts = { done: done.length, failed: failed.length };
   let title;
   let body;
   if (items.length === 1) {
@@ -173,7 +200,7 @@ function describe(items) {
       title = `${item.label} finished (${formatDuration(item.endedAt - item.startedAt)})`;
       body = '';
     }
-    return { kind, title, body, short: item.type === 'failed' ? failureText(item) : title, target };
+    return { kind, title, body, short: item.type === 'failed' ? failureText(item) : title, target, counts };
   }
   if (kind === 'done') {
     title = `${done.length} tasks finished`;
@@ -185,7 +212,7 @@ function describe(items) {
     title = `${failed.length} failed, ${done.length} finished`;
     body = `${failureText(failed[0])}${failed.length > 1 ? ` (+${failed.length - 1} more)` : ''}`;
   }
-  return { kind, title, body, short: title, target };
+  return { kind, title, body, short: title, target, counts };
 }
 
 // ----- spam limit -----
@@ -281,5 +308,5 @@ function createNotifier({
 module.exports = {
   MIN_RUN_MS, QUIET_MS, MAX_PER_MINUTE, DEDUPE_MS, MAX_PENDING,
   cleanLabel, formatDuration, coerceFlag, classifyFailure,
-  createTracker, systemFailure, describe, createLimiter, createNotifier,
+  createTracker, systemFailure, describe, permissionNote, createLimiter, createNotifier,
 };

@@ -11,6 +11,9 @@ const commandCatalog = require('./command-catalog');
 const heroDesign = require('./hero-design');
 const { DRAWER_EXTRA, chooseDrawerMode, windowRect } = require('./drawer-layout');
 const notify = require('./notify');
+const visibility = require('./window-visibility');
+const bubbleState = require('./bubble-state');
+const bubbleGeo = require('./bubble-geometry');
 
 // Windows shows toasts only for an app with an AppUserModelId.
 if (process.platform === 'win32') app.setAppUserModelId('com.claudebar.heroes');
@@ -44,6 +47,21 @@ let runningWsId = null;     // workspace of the Claude run in progress
 let mainHandle = null;      // handle to current main Claude process
 let generalChatHandle = null; // handle to general chat Claude process
 let generalSessionId = null;  // general chat conversation (kept while the app runs)
+// Hide / show (see applyVisibility). Memory only: the app always starts visible. Hiding needs a way back: the tray, or the bubble.
+const vis = visibility.createVisibility({ trayOk: false, bubbleOk: process.env.CBH_WINDOW_NOBUBBLE !== '1', mode: 'bubble' });
+let mouseIgnored = true;      // what main last set with setIgnoreMouseEvents (the window starts click-through)
+let commandTimer = null;      // test seam CBH_WINDOW_COMMANDS
+// The floating bubble (see "The floating bubble" below): a second small window, created at the first hide and then kept.
+let bubbleWin = null;
+let bubbleLoaded = false;     // its page finished loading
+let bubbleWanted = false;     // main wants it on screen (set by the show-bubble effect, cleared by hide-bubble)
+let bubbleOk = process.env.CBH_WINDOW_NOBUBBLE !== '1'; // false once it could not be created or was lost: the tray rule applies
+let trayAvailable = false;
+let bubbleTimer = null;       // the drag poll
+let lastBubblePayload = '';
+let bubbleDragStart = null;   // the bubble's position when a drag began
+const bubbleBadge = bubbleState.createBadge();
+const bubbleGesture = bubbleGeo.createGesture();
 
 function defaultStripPos() {
   const { workArea } = screen.getPrimaryDisplay();
@@ -158,6 +176,9 @@ function createWindow() {
     agents.denyAllPermissions();
   });
 
+  // A reloaded renderer starts out thinking it is visible.
+  win.webContents.on('did-finish-load', () => { if (vis.hidden()) win?.webContents.send('window:visible', { visible: false }); });
+
   win.on('closed', () => { win = null; });
 }
 
@@ -178,19 +199,252 @@ function trayIcon() {
   return nativeImage.createFromBitmap(buf, { width: size, height: size });
 }
 
-function createTray() {
-  tray = new Tray(trayIcon());
-  tray.setToolTip('Claudebar Heroes');
-  const menu = Menu.buildFromTemplate([
-    { label: 'Show / Hide', click: toggleVisible },
-    { label: 'Open Chat', accelerator: TOGGLE_SHORTCUT, click: togglePanel },
+function trayMenu() {
+  return Menu.buildFromTemplate([
+    { label: visibility.trayLabel(vis.hidden()), click: () => applyVisibility('toggle', 'tray') },
+    { label: 'Open Chat', accelerator: TOGGLE_SHORTCUT, click: () => togglePanel('tray') },
     { label: 'Reset Position', click: resetPosition },
     { type: 'separator' },
     { label: 'Open DevTools', click: () => win?.webContents.openDevTools({ mode: 'detach' }) },
     { type: 'separator' },
     { label: 'Quit', role: 'quit' },
   ]);
-  tray.setContextMenu(menu);
+}
+
+// True when the tray icon exists. Without it there would be no way back from a hidden window, so hiding is refused.
+function createTray() {
+  // Test seam (environment of the main process only): pretend the tray could not be created.
+  if (process.env.CBH_WINDOW_NOTRAY === '1') return false;
+  try {
+    tray = new Tray(trayIcon());
+    tray.setToolTip('Claudebar Heroes');
+    tray.setContextMenu(trayMenu());
+    // macOS opens the menu on a click; elsewhere a plain click toggles.
+    if (process.platform !== 'darwin') tray.on('click', () => applyVisibility('toggle', 'tray'));
+    return true;
+  } catch (err) {
+    console.error('Could not create the tray icon:', err);
+    tray = null;
+    return false;
+  }
+}
+
+// ----- the floating bubble -----
+// While the app is hidden in 'bubble' mode a small round window stays on screen. Main owns everything about it: the page
+// only reports press / release / right-click, main decides click or drag, builds the menu and the badge. The page has no
+// `window.bar` (own preload) and every `bubble:*` message is checked against the bubble window's own webContents.
+const BUBBLE_URL = path.join(__dirname, '..', '..', 'dist', 'renderer', 'bubble.html');
+
+function bubbleLive() { return !!bubbleWin && !bubbleWin.isDestroyed(); }
+// On screen as far as main is concerned (it is wanted, hidden mode is on and the window exists).
+function bubbleUp() { return bubbleLive() && bubbleWanted && vis.hidden(); }
+
+// The bubble was closed, crashed or failed to load: from now on the old tray rule applies. Never lose the app: if it was
+// the only way back (no tray), show the strip again.
+function onBubbleLost() {
+  const was = bubbleWin;
+  bubbleWin = null;
+  bubbleLoaded = false;
+  bubbleWanted = false;
+  stopBubblePoll();
+  bubbleGesture.cancel();
+  if (quitting || !was) return;
+  bubbleOk = false;
+  vis.setBubble(false);
+  logWindow({ event: 'bubble', action: 'lost' });
+  if (vis.hidden() && !vis.canHide()) applyVisibility('show', 'bubble');
+}
+
+function ensureBubble() {
+  if (bubbleLive()) return true;
+  if (!bubbleOk || process.env.CBH_WINDOW_NOBUBBLE === '1') { bubbleOk = false; return false; }
+  try {
+    const w = new BrowserWindow({
+      width: bubbleGeo.BUBBLE_SIZE,
+      height: bubbleGeo.BUBBLE_SIZE,
+      show: false,
+      frame: false,
+      transparent: true,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      focusable: false,
+      skipTaskbar: true,
+      hasShadow: false,
+      alwaysOnTop: true,
+      acceptFirstMouse: true,
+      backgroundColor: '#00000000',
+      webPreferences: {
+        preload: path.join(__dirname, 'bubble-preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        webSecurity: true,
+        spellcheck: false,
+      },
+    });
+    bubbleWin = w;
+    bubbleLoaded = false;
+    // A page that can never leave bubble.html or open another window.
+    w.webContents.on('will-navigate', (e) => e.preventDefault());
+    w.webContents.on('will-redirect', (e) => e.preventDefault());
+    w.webContents.on('will-attach-webview', (e) => e.preventDefault());
+    w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    w.webContents.on('did-finish-load', () => {
+      if (bubbleWin !== w) return;
+      bubbleLoaded = true;
+      lastBubblePayload = '';
+      if (bubbleUp()) showBubbleNow();
+    });
+    w.webContents.on('did-fail-load', () => { if (bubbleWin === w) w.destroy(); });
+    w.webContents.on('render-process-gone', () => { if (bubbleWin === w) w.destroy(); });
+    w.on('closed', () => { if (bubbleWin === w || bubbleWin === null) onBubbleLost(); });
+    w.loadFile(BUBBLE_URL).catch(() => { if (bubbleWin === w && !w.isDestroyed()) w.destroy(); });
+    return true;
+  } catch (err) {
+    console.error('Could not create the bubble:', err);
+    bubbleWin = null;
+    bubbleOk = false;
+    return false;
+  }
+}
+
+const workAreas = () => screen.getAllDisplays().map((d) => d.workArea);
+
+// Where the bubble goes: the saved spot if some display still shows it, else next to where the strip was; always inside a work area.
+function bubbleSpot() {
+  const areas = workAreas();
+  let pos = bubbleGeo.cleanBubblePos(settings.get().bubblePos);
+  if (!pos || !bubbleGeo.isShown(pos, areas)) pos = bubbleGeo.defaultBubblePos(stripPos || defaultStripPos(), WIN_WIDTH, STRIP_H, MARGIN);
+  return bubbleGeo.clampBubblePos(pos, areas) || pos;
+}
+
+function pushBubble(force = false) {
+  if (!bubbleLive() || !bubbleLoaded) return;
+  const p = bubbleState.payload(bubbleBadge.view(), settings.get().theme);
+  const json = JSON.stringify(p);
+  if (!force && json === lastBubblePayload) return;
+  lastBubblePayload = json;
+  bubbleWin.webContents.send('bubble:state', p);
+  logWindow({ event: 'bubble', action: 'state', badge: p.badge, label: p.label, theme: p.theme });
+}
+
+function logBubble(action, extra = {}) {
+  if (!process.env.CBH_WINDOW_LOG) return;
+  logWindow({
+    event: 'bubble', action, bubbleVisible: bubbleLive() && bubbleWin.isVisible(), stripVisible: !!win && !win.isDestroyed() && win.isVisible(), ...extra,
+  });
+}
+
+// Puts the bubble on screen (it is already wanted and the strip is hidden).
+function showBubbleNow() {
+  if (!bubbleLive() || !bubbleLoaded) return;
+  const pos = bubbleSpot();
+  bubbleWin.setBounds({ x: pos.x, y: pos.y, width: bubbleGeo.BUBBLE_SIZE, height: bubbleGeo.BUBBLE_SIZE });
+  bubbleWin.setAlwaysOnTop(true, 'pop-up-menu');
+  bubbleWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  syncBadge();
+  pushBubble(true);
+  bubbleWin.showInactive();
+  logBubble('show', { bpos: pos });
+}
+
+function stopBubblePoll() {
+  if (bubbleTimer) clearInterval(bubbleTimer);
+  bubbleTimer = null;
+  bubbleDragStart = null;
+}
+
+// ----- the gesture: main decides, from the cursor, whether it was a click or a drag -----
+function bubblePress(point) {
+  if (!bubbleUp()) return;
+  stopBubblePoll();
+  bubbleGesture.press(point);
+  const [x, y] = bubbleWin.getPosition();
+  bubbleDragStart = { x, y };
+}
+function bubbleMove(point) {
+  if (!bubbleUp() || !bubbleDragStart) return;
+  const m = bubbleGesture.move(point);
+  if (!m.dragging) return;
+  const x = Math.round(bubbleDragStart.x + m.dx);
+  const y = Math.round(bubbleDragStart.y + m.dy);
+  const [cx, cy] = bubbleWin.getPosition();
+  if (x !== cx || y !== cy) bubbleWin.setPosition(x, y);
+}
+function bubbleRelease(point) {
+  if (!bubbleUp()) { bubbleGesture.cancel(); stopBubblePoll(); return; }
+  bubbleMove(point);
+  const result = bubbleGesture.release();
+  stopBubblePoll();
+  if (result === 'click') applyVisibility('show', 'bubble');
+  else if (result === 'drag') {
+    // The drop spot is kept inside a work area (never under the dock or taskbar) and remembered; only main writes it.
+    const [x, y] = bubbleWin.getPosition();
+    const pos = bubbleGeo.clampBubblePos({ x, y }, workAreas()) || { x, y };
+    bubbleWin.setPosition(pos.x, pos.y);
+    settings.set({ bubblePos: pos });
+    logBubble('move', { bpos: pos });
+  }
+}
+function startBubblePoll() {
+  bubbleTimer = setInterval(() => {
+    if (!bubbleUp() || !bubbleGesture.active()) { stopBubblePoll(); return; }
+    bubbleMove(screen.getCursorScreenPoint());
+  }, 16);
+}
+
+// The right-click menu: fixed items, no text from the page.
+function bubbleMenuTemplate() {
+  return [
+    { label: 'Show Claudebar Heroes', click: () => applyVisibility('show', 'bubble') },
+    { type: 'separator' },
+    { label: 'Quit', role: 'quit' },
+  ];
+}
+function openBubbleMenu(seamClick) {
+  if (!bubbleUp()) return;
+  bubbleGesture.cancel();
+  stopBubblePoll();
+  const template = bubbleMenuTemplate();
+  if (seamClick !== undefined) { // test seam: log the labels instead of popping a native menu
+    logBubble('menu', { labels: template.map((t) => t.label || '-') });
+    const item = template.find((t) => t.label === seamClick);
+    if (item && item.click) item.click();
+    return;
+  }
+  Menu.buildFromTemplate(template).popup({ window: bubbleWin });
+}
+
+// Only the bubble's own page may call these; the app's window has no such channel and is rejected here anyway.
+const fromBubble = (e) => bubbleLive() && e.sender === bubbleWin.webContents && bubbleUp();
+function registerBubbleIpc() {
+  ipcMain.on('bubble:press', (e) => {
+    if (!fromBubble(e)) return;
+    bubblePress(screen.getCursorScreenPoint());
+    startBubblePoll();
+  });
+  ipcMain.on('bubble:release', (e) => { if (fromBubble(e)) bubbleRelease(screen.getCursorScreenPoint()); });
+  ipcMain.on('bubble:menu', (e) => { if (fromBubble(e)) openBubbleMenu(); });
+}
+
+// Keeps the badge in step with what main already knows (trackers); display only. A request waiting for the user shows as
+// "ask" even when both notification switches are off: it is a blocked run. Nothing here shows the strip or answers a card.
+function syncBadge() {
+  let waiting = 0;
+  let running = false;
+  for (const t of new Set([questTracker, ...agentTrackers.values()])) {
+    if (!t) continue;
+    if (!t.ended()) waiting += t.waiting();
+    if (t.running()) running = true;
+  }
+  bubbleBadge.setWaiting(waiting);
+  bubbleBadge.setRunning(running);
+}
+function refreshBadge() {
+  syncBadge();
+  if (bubbleUp()) pushBubble();
 }
 
 // ----- notifications: "work finished" / "something failed" -----
@@ -220,7 +474,7 @@ const windowFocused = () => (process.env.CBH_NOTIFY_FOCUS === '1' ? true : proce
 
 function showFromNotification(target) {
   if (!win || win.isDestroyed()) return;
-  if (!win.isVisible()) win.showInactive();
+  applyVisibility('show', 'notification');
   win.focus();
   win.webContents.send('notify:open', { wsId: target?.wsId ?? null, agentId: target?.agentId ?? null });
 }
@@ -252,6 +506,12 @@ function showNative(note) {
 // Always the in-app cue; the OS notification only when `native` (the user cannot see the panel anyway).
 function deliverNotification(note) {
   if (quitting) return false;
+  // The bubble keeps what finished or failed while the app is hidden, until the strip is shown. This follows the same
+  // rules as the notification (switches, minimum length, grouping); the spam limit only governs `native`.
+  if (bubbleUp() && note.counts && (note.kind === 'done' || note.kind === 'failed' || note.kind === 'mixed')) {
+    bubbleBadge.latch(note.counts);
+    pushBubble();
+  }
   if (win && !win.isDestroyed()) {
     win.webContents.send('notify:show', { kind: note.kind, title: note.title, text: note.short, target: note.target ? { wsId: note.target.wsId, agentId: note.target.agentId } : null });
   }
@@ -285,6 +545,22 @@ function setupNotifier() {
   });
 }
 
+// A request that waits for the user's OK while the app is hidden: one native notification (fixed text, same spam limit),
+// no auto-show and no auto-approve. Both notification switches off means the user opted out of notifications.
+function announcePermission(tracker) {
+  if (!notifier || quitting) return;
+  const flags = settings.get();
+  if (flags.notifyDone === false && flags.notifyFail === false) return;
+  const note = tracker.permissionNote();
+  if (notifyLimiter.allow(`${note.title}\n${note.body}`)) showNative(note);
+}
+
+// Hiding with a request already waiting: it was raised while the window was visible, so say it now (once per run).
+function announcePendingPermissions() {
+  const trackers = [questTracker, ...agentTrackers.values()].filter((t) => t && t.waiting() > 0 && !t.ended());
+  for (const t of new Set(trackers)) announcePermission(t);
+}
+
 // Feeds one process's events to its tracker; it only observes and never throws into the run.
 function observeRun(tracker, event) {
   if (!notifier || quitting) return;
@@ -292,24 +568,131 @@ function observeRun(tracker, event) {
     const early = tracker.event(event);
     if (early) notifier.add(early);
     if (event.type === 'end') notifier.add(tracker.outcome());
+    if (event.type === 'permission' && vis.hidden()) announcePermission(tracker);
+    refreshBadge();
   } catch { /* notifications must never break a run */ }
 }
 function observeAgent(tracker, agentId, event) {
   if (!notifier) return;
   if (event.type === 'start') agentTrackers.set(agentId, tracker);
   observeRun(tracker, event);
-  if (event.type === 'end' && agentTrackers.get(agentId) === tracker) agentTrackers.delete(agentId);
+  if (event.type === 'end' && agentTrackers.get(agentId) === tracker) { agentTrackers.delete(agentId); try { refreshBadge(); } catch { /* display only */ } }
 }
 
-function toggleVisible() {
-  if (!win) return;
-  if (win.isVisible()) win.hide();
-  else win.showInactive();
+// The one place that hides or shows the window. The pure rules (window-visibility.js) decide and return ordered effects;
+// they run here at once on the main thread, so two quick requests cannot interleave. NOTHING about a run, a chain, the
+// queue, a permission request or the archive is touched: hiding only changes the window.
+function applyVisibility(action, reason) {
+  if (!win || win.isDestroyed()) return { changed: false, hidden: vis.hidden(), effects: [], refused: 'no-window' };
+  // Follow reality before a show: if the window is not visible after all, the request must be able to show it.
+  if (action !== 'hide' && !win.isVisible()) vis.sync(false);
+  // The mode is read from the saved settings at every request, and the bubble is made (once) before a hide so the rules
+  // know whether it can be the way back.
+  vis.setMode(settings.get().minimizeTo);
+  if (action !== 'show' && !vis.hidden() && vis.mode() === 'bubble') vis.setBubble(ensureBubble());
+  const result = vis.request(action, reason);
+  for (const effect of result.effects) {
+    if (effect === 'stop-drag') {
+      if (dragTimer) {
+        clearInterval(dragTimer);
+        dragTimer = null;
+        stripPos = clampToDisplay(stripPos);
+        settings.set({ windowPos: stripPos });
+      }
+    } else if (effect === 'close-panel') {
+      panelOpen = false;
+      drawerOpen = false;
+      applyBounds();
+    } else if (effect === 'hide-window') {
+      setMouseIgnored(true);
+      win.hide();
+    } else if (effect === 'show-bubble') {
+      bubbleWanted = true;
+      if (bubbleLoaded) showBubbleNow(); // else the page's did-finish-load shows it
+      else syncBadge();
+    } else if (effect === 'hide-bubble') {
+      bubbleWanted = false;
+      bubbleBadge.clearLatched();
+      bubbleGesture.cancel();
+      stopBubblePoll();
+      if (bubbleLive()) { bubbleWin.hide(); logBubble('hide'); }
+    } else if (effect === 'place') {
+      // Same rule as a display change: keep the spot if a display still shows it, else the default one. Bounds are
+      // set BEFORE the window appears, so it never flashes at an old size.
+      if (!isOnScreen(stripPos)) stripPos = defaultStripPos();
+      applyBounds();
+    } else if (effect === 'show-window') {
+      win.showInactive();
+    } else if (effect === 'reassert') {
+      // macOS can drop these across a hide / show.
+      win.setAlwaysOnTop(true, 'pop-up-menu');
+      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    } else if (effect === 'notify-renderer') {
+      win.webContents.send('window:visible', { visible: !vis.hidden() });
+    }
+  }
+  if (result.changed && tray && !tray.isDestroyed?.()) {
+    try { tray.setContextMenu(trayMenu()); } catch { /* the label is cosmetic */ }
+  }
+  if (result.changed && result.hidden) announcePendingPermissions();
+  logWindow({ event: 'visibility', action: result.action, reason: result.reason, changed: result.changed, refused: result.refused ?? null, effects: result.effects });
+  return result;
 }
 
-function togglePanel() {
+function setMouseIgnored(ignore) {
+  mouseIgnored = ignore;
+  win?.setIgnoreMouseEvents(ignore, { forward: true });
+  if (process.env.CBH_WINDOW_LOG) logWindow({ event: 'click-through', ignore });
+}
+
+// Test seam: CBH_WINDOW_LOG=<file> appends one JSON line per outcome (main's environment only, never settings or IPC).
+function logWindow(entry) {
+  const file = process.env.CBH_WINDOW_LOG;
+  if (!file) return;
+  try {
+    fs.appendFileSync(file, `${JSON.stringify({
+      at: Date.now(), ...entry, visible: !vis.hidden(), canHide: vis.canHide(), mode: vis.mode(), panelOpen, drawerOpen, pos: stripPos, ignore: mouseIgnored,
+    })}\n`);
+  } catch { /* the log is only a test aid */ }
+}
+
+// Test seam: CBH_WINDOW_COMMANDS=<file> is polled every 200 ms; each new line runs the same handler the OS event would
+// (an automated test cannot click the OS tray or a notification). Lines: `tray`, `shortcut`, `notify-click {"wsId":..,"agentId":..}`,
+// `bubble-click {"dx":..}`, `bubble-drag {"dx":..,"dy":..}` and `bubble-menu [item label]` (only while the bubble is up).
+function startCommandSeam() {
+  const file = process.env.CBH_WINDOW_COMMANDS;
+  if (!file) return;
+  let done = 0;
+  commandTimer = setInterval(() => {
+    let lines;
+    try { lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean); } catch { return; }
+    for (; done < lines.length; done++) {
+      const [name, ...rest] = lines[done].split(' ');
+      if (name === 'tray') applyVisibility('toggle', 'tray');
+      else if (name === 'shortcut') togglePanel('shortcut');
+      else if (name === 'notify-click') {
+        let target = null;
+        try { target = JSON.parse(rest.join(' ')); } catch { /* no target */ }
+        showFromNotification(target);
+      } else if (name === 'bubble-click' || name === 'bubble-drag') {
+        // The same press / move / release path as the real gesture, with a synthetic cursor; only when the bubble is up.
+        let d = {};
+        try { d = JSON.parse(rest.join(' ') || '{}'); } catch { /* defaults */ }
+        const dx = Number.isFinite(d.dx) ? d.dx : 0;
+        const dy = Number.isFinite(d.dy) ? d.dy : 0;
+        if (bubbleUp()) { bubblePress({ x: 0, y: 0 }); bubbleRelease({ x: dx, y: dy }); }
+      } else if (name === 'bubble-menu') {
+        openBubbleMenu(rest.join(' ') || '');
+      }
+    }
+  }, 200);
+  commandTimer.unref?.();
+}
+
+// Tray -> Open Chat and the global shortcut: show the window if hidden, focus it and toggle the panel.
+function togglePanel(reason = 'shortcut') {
   if (!win) return;
-  if (!win.isVisible()) win.showInactive();
+  applyVisibility('show', reason);
   win.focus();
   win.webContents.send('panel:toggle');
 }
@@ -321,7 +704,8 @@ function registerIpc() {
   ipcMain.handle('settings:set', (_e, patch) => {
     if (!patch || typeof patch !== 'object') return settings.get();
     // archive lives in workspaces; the notify flags only change through settings:update (booleans only); permissionMode only changes through settings:update (validated, and applied to live runs)
-    const { workspaces, summonDesigns, migrations, archive, permissionMode, notifyDone, notifyFail, ...rest } = patch;
+    // window state (hidden / visible) is never a setting: it lives in main's memory only
+    const { workspaces, summonDesigns, migrations, archive, permissionMode, notifyDone, notifyFail, hidden, startHidden, visible, minimizeTo, bubblePos, ...rest } = patch;
     return settings.set(rest);
   });
 
@@ -411,15 +795,27 @@ function registerIpc() {
   });
 
   ipcMain.on('window:clickThrough', (_e, ignore) => {
-    win?.setIgnoreMouseEvents(ignore, { forward: true });
+    if (vis.hidden() || typeof ignore !== 'boolean') return; // a hidden window stays click-through
+    setMouseIgnored(ignore);
   });
 
-  ipcMain.on('window:focus', () => win?.focus());
+  ipcMain.on('window:focus', () => { if (!vis.hidden()) win?.focus(); });
+
+  // The renderer only asks; main decides (and refuses without a tray). There is no "show" request: a hidden window
+  // cannot be clicked, so the ways back are all in main (tray, shortcut, notification click, a second launch).
+  ipcMain.handle('window:hide', () => {
+    const r = applyVisibility('hide', 'button');
+    return r.refused ? { ok: false, reason: r.refused } : { ok: true };
+  });
+  ipcMain.handle('window:info', () => {
+    vis.setMode(settings.get().minimizeTo);
+    return { canHide: vis.canHide(), minimizeTo: vis.mode(), tray: trayAvailable, bubble: bubbleOk };
+  });
 
   // Dragging is done by polling the cursor rather than with
   // -webkit-app-region, which doesn't mix well with click-through.
   ipcMain.on('window:dragStart', () => {
-    if (!win) return;
+    if (!win || vis.hidden()) return;
     const cursor = screen.getCursorScreenPoint();
     const offset = { x: cursor.x - stripPos.x, y: cursor.y - stripPos.y };
     clearInterval(dragTimer);
@@ -462,7 +858,7 @@ function registerIpc() {
   ipcMain.handle('panel:side', () => chooseSide());
 
   ipcMain.handle('panel:setOpen', (_e, open) => {
-    panelOpen = open === true;
+    panelOpen = open === true && !vis.hidden(); // a late call cannot grow a hidden window
     if (!panelOpen) drawerOpen = false; // the drawer is a companion of the panel
     if (panelOpen) panelSide = chooseSide();
     applyBounds();
@@ -474,7 +870,7 @@ function registerIpc() {
 
   ipcMain.handle('panel:setDrawer', (_e, open) => {
     if (open !== true && open !== false) return drawerOpen ? drawerMode : 'none';
-    if (open && !panelOpen) return 'none';
+    if (open && (!panelOpen || vis.hidden())) return 'none';
     drawerOpen = open;
     if (open) drawerMode = currentDrawerMode();
     applyBounds();
@@ -586,7 +982,9 @@ function registerIpc() {
     if (patch.theme === 'dark' || patch.theme === 'light') allowed.theme = patch.theme;
     if (typeof patch.notifyDone === 'boolean') allowed.notifyDone = patch.notifyDone;
     if (typeof patch.notifyFail === 'boolean') allowed.notifyFail = patch.notifyFail;
+    if (visibility.MODES.includes(patch.minimizeTo)) allowed.minimizeTo = patch.minimizeTo; // bubblePos is never taken from the renderer
     const saved = Object.keys(allowed).length ? settings.set(allowed) : settings.get();
+    if (allowed.minimizeTo) vis.setMode(allowed.minimizeTo);
     // The footer mode also applies to the processes that are working right now (main is the only source of the mode).
     if (allowed.permissionMode && allowed.permissionMode !== previousMode) {
       if (mainHandle?.running) mainHandle.setPermissionMode(allowed.permissionMode);
@@ -747,31 +1145,50 @@ function registerIpc() {
   ipcMain.on('app:quit', () => app.quit());
 
   ipcMain.on('app:restart', () => {
+    app.releaseSingleInstanceLock(); // the new process must be able to take it as soon as it starts
     app.relaunch();
     app.quit();
   });
 }
 
-app.whenReady().then(() => {
-  if (process.platform === 'darwin') app.dock?.hide();
+// One running app per user-data folder: starting it again brings the running one back instead of opening a second
+// strip. (The lock is per user-data folder, so an instance started with its own --user-data-dir is independent.)
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) app.quit();
 
-  panelHeight = settings.get().panelHeight ?? DEFAULT_PANEL_HEIGHT;
-  setupNotifier();
-  registerIpc();
-  createWindow();
-  createTray();
-  globalShortcut.register(TOGGLE_SHORTCUT, togglePanel);
+if (gotLock) {
+  app.on('second-instance', () => { applyVisibility('show', 'second-instance'); });
 
-  const recheck = () => {
-    if (!isOnScreen(stripPos)) stripPos = defaultStripPos();
-    applyBounds();
-  };
-  screen.on('display-metrics-changed', recheck);
-  screen.on('display-removed', recheck);
-});
+  app.whenReady().then(() => {
+    if (process.platform === 'darwin') app.dock?.hide();
+
+    panelHeight = settings.get().panelHeight ?? DEFAULT_PANEL_HEIGHT;
+    setupNotifier();
+    registerIpc();
+    registerBubbleIpc();
+    createWindow();
+    trayAvailable = createTray();
+    vis.setTray(trayAvailable);
+    globalShortcut.register(TOGGLE_SHORTCUT, () => togglePanel('shortcut'));
+    startCommandSeam();
+
+    const recheck = () => {
+      if (!isOnScreen(stripPos)) stripPos = defaultStripPos();
+      applyBounds();
+      if (bubbleUp()) showBubbleNow(); // re-places the bubble inside a work area that still exists
+    };
+    screen.on('display-metrics-changed', recheck);
+    screen.on('display-removed', recheck);
+  });
+}
 
 app.on('will-quit', () => {
+  if (!gotLock) return; // a second launch never loaded anything: flushing would write an empty settings file
   quitting = true; // runs cancelled below must not notify
+  clearInterval(commandTimer);
+  clearInterval(dragTimer);
+  stopBubblePoll();
+  if (bubbleLive()) bubbleWin.destroy();
   notifier?.dispose();
   globalShortcut.unregisterAll();
   mainHandle?.cancel();

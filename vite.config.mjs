@@ -15,5 +15,12 @@ export default defineConfig({
     outDir: path.resolve(here, 'dist/renderer'),
     emptyOutDir: true,
     target: 'chrome140',
+    // Two pages: the app and the small floating bubble (src/renderer/bubble.html).
+    rollupOptions: {
+      input: {
+        main: path.resolve(here, 'src/renderer/index.html'),
+        bubble: path.resolve(here, 'src/renderer/bubble.html'),
+      },
+    },
   },
 });
