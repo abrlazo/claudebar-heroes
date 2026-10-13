@@ -31,6 +31,8 @@ contextBridge.exposeInMainWorld('bar', {
   setPanelOpen: (open) => ipcRenderer.invoke('panel:setOpen', open),
   drawerMode: () => ipcRenderer.invoke('panel:drawerMode'),
   setDrawerOpen: (open) => ipcRenderer.invoke('panel:setDrawer', open === true),
+  hideWindow: () => ipcRenderer.invoke('window:hide'),
+  windowInfo: () => ipcRenderer.invoke('window:info'),
   quit: () => ipcRenderer.send('app:quit'),
   restartApp: () => ipcRenderer.send('app:restart'),
 
@@ -63,6 +65,7 @@ contextBridge.exposeInMainWorld('bar', {
   addMessage: (wsId, message) => ipcRenderer.send('chat:addMessage', { wsId, message }),
   setNotifyView: (view) => ipcRenderer.send('notify:view', view),
   testNotify: () => ipcRenderer.invoke('notify:test'),
+  onWindowVisible: (cb) => subscribe('window:visible', cb),
   onNotify: (cb) => subscribe('notify:show', cb),
   onNotifyOpen: (cb) => subscribe('notify:open', cb),
 });

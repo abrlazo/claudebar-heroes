@@ -96,6 +96,8 @@ export interface WorkspaceStats {
   mapsSeen: string[];
 }
 
+export type MinimizeTo = 'bubble' | 'tray';
+
 export interface Settings {
   permissionMode: PermissionMode;
   windowPos: { x: number; y: number } | null;
@@ -106,6 +108,8 @@ export interface Settings {
   /** Notify (OS notification, or an in-app cue) when work finishes / when something fails. Booleans only. */
   notifyDone: boolean;
   notifyFail: boolean;
+  /** Where "Hide the app" goes: a small floating bubble, or only the tray icon. (The bubble's position is main-only.) */
+  minimizeTo?: MinimizeTo;
   /** One-time data migrations applied by the main process (read-only here). */
   migrations?: Record<string, boolean>;
 }
@@ -273,6 +277,10 @@ export interface Bar {
   drawerMode(): Promise<DrawerMode>;
   /** Ask main to open or close the drawer (it chooses the mode and the window size). 'none' = closed or refused. */
   setDrawerOpen(open: boolean): Promise<DrawerMode | 'none'>;
+  /** Ask main to hide the app (it closes the panel first). `ok: false` when it cannot (no tray icon = no way back). */
+  hideWindow(): Promise<{ ok: boolean; reason?: string }>;
+  /** Whether hiding is possible at all (the tray icon exists, or the bubble can be the way back), and where it goes. */
+  windowInfo(): Promise<{ canHide: boolean; minimizeTo?: MinimizeTo; tray?: boolean; bubble?: boolean }>;
   quit(): void;
   restartApp(): void;
 
@@ -322,6 +330,8 @@ export interface Bar {
   setNotifyView(view: { tab: string; wsId: string | null; agentId: string | null }): void;
   /** Sends a test notification; `native` is whether the system one was shown (false: unavailable, blocked or rate-limited). */
   testNotify(): Promise<{ native: boolean }>;
+  /** Main hid or showed the window (the renderer pauses the battle loop while hidden). */
+  onWindowVisible(cb: (state: { visible: boolean }) => void): Unsubscribe;
   onNotify(cb: (note: NotifyEvent) => void): Unsubscribe;
   onNotifyOpen(cb: (target: NotifyTarget) => void): Unsubscribe;
 }
