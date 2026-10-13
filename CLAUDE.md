@@ -149,7 +149,6 @@ Events: `permission` (`requestId`, `tool`, `summary`, `detail`, `truncatedLines`
 | `notifyDone` / `notifyFail` off | no | no (both channels are silenced, per kind) |
 | More than 4 native per minute, or identical text within 60 s | no (`createLimiter`) | yes |
 | `Notification.isSupported()` false, or the OS reported `failed` (`nativeBroken`) | no | yes |
-| Permission request while the app is hidden (raised then, or already waiting when it was hidden) | yes (fixed text "<label> needs your OK", same spam limit, only when a notify switch is on) | none (the window is hidden) |
 | Permission request while the app is hidden (raised then, or already waiting when it was hidden) | yes: fixed text "<label> needs your OK", same spam limit, only when `notifyDone` or `notifyFail` is on; the click shows the window and the right chat | none (the window is hidden); never auto-shown, never auto-approved |
 | Permission request timed out (`permission-resolved` `how: 'timeout'`) | failure, told once per run (the run's later end is then silent) | same |
 | settings.json could not be written (`settings.onWriteError`, at most once per 10 minutes, never while quitting) | failure "Settings could not be saved..." | same |
