@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef } from 'react';
 import type { ChatMessage } from '../../types';
+import { Markdown } from './Markdown';
 
 /** One chat message. `tool` messages render as "⚔ Name summary". */
 const Message = memo(function Message({ msg }: { msg: ChatMessage }) {
@@ -19,6 +20,7 @@ const Message = memo(function Message({ msg }: { msg: ChatMessage }) {
       </details>
     );
   }
+  if (msg.kind === 'assistant') return <div className="msg assistant md"><Markdown text={msg.text} /></div>;
   return <div className={`msg ${msg.kind}`}>{msg.text}</div>;
 });
 
@@ -66,7 +68,7 @@ export function MessageLog({ messages, streaming = '', streamingThinking = '', w
           {streamingThinking}
         </details>
       )}
-      {streaming && <div className="msg assistant">{streaming}</div>}
+      {streaming && <div className="msg assistant md"><Markdown text={streaming} /></div>}
       {working && <div className="msg thinking working">🧘 Meditating<span className="dots" /></div>}
     </div>
   );
