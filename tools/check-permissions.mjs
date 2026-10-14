@@ -139,6 +139,15 @@ check('deny line matches the verified shape', denyLine === '{"type":"control_res
 check('error line for unsupported requests', JSON.parse(perm.buildErrorResponse('q', 'unsupported')).response.subtype === 'error');
 const userLine = JSON.parse(perm.buildUserLine('multi\nline "quoted"'));
 check('user line carries the prompt as one text block', userLine.type === 'user' && userLine.message.content[0].text === 'multi\nline "quoted"' && perm.buildUserLine('a').endsWith('\n'));
+check('user line without images is byte-identical to the old format', perm.buildUserLine('hi') === '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}\n' && perm.buildUserLine('hi', []) === perm.buildUserLine('hi'));
+{
+  const a = Buffer.from([1, 2, 3, 250]); const b = Buffer.from('second');
+  const line = perm.buildUserLine('what is this', [{ mime: 'image/png', buffer: a }, { mime: 'image/jpeg', buffer: b }]);
+  const c = JSON.parse(line).message.content;
+  check('user line with images: image blocks first, then one text block', line.endsWith('\n') && c.length === 3 && c[0].type === 'image' && c[1].type === 'image' && c[2].type === 'text' && c[2].text === 'what is this');
+  check('user line with images: base64 source and the given media types', c[0].source.type === 'base64' && c[0].source.media_type === 'image/png' && Buffer.from(c[0].source.data, 'base64').equals(a) && c[1].source.media_type === 'image/jpeg' && Buffer.from(c[1].source.data, 'base64').equals(b));
+  check('user line with images and empty text has no text block', JSON.parse(perm.buildUserLine('', [{ mime: 'image/png', buffer: a }])).message.content.every((x) => x.type === 'image'));
+}
 
 // ----- renderer list rules (lib/permissions.ts) -----
 const req = (id, owner = { kind: 'quest', wsId: 'w' }) => ({ requestId: id, owner, tool: 'Bash', summary: 's', detail: 'd', truncatedLines: 0, truncated: false, path: '', viaSubagent: false, expiresAt: 10_000 });

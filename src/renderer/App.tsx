@@ -26,6 +26,8 @@ import { MAX_AGENTS, MAX_CHAIN_STEPS, parseAgentChain, parseAgentInvocation } fr
 import type { AgentInvocation } from './lib/agents';
 import { bar } from './lib/bridge';
 import { MAX_QUEUED } from './lib/queue';
+import type { AttachedImage } from './lib/queue';
+import { useBlockFileDrop } from './hooks/useImageAttachments';
 import type { Workspace } from './types';
 import { levelFor, xpFor } from './lib/leveling';
 import { DEFAULT_ASK_MODEL, DEFAULT_PROJECT_MODEL } from './lib/models';
@@ -103,7 +105,7 @@ function AppShell() {
   const drainQueue = (id: string) => {
     if (run.busyNow() || queue.isPaused(id) || getSettings().activeId !== id) return;
     const next = queue.take(id);
-    if (next) run.send(id, next.text, projectModelRef.current);
+    if (next) run.send(id, next.text, projectModelRef.current, next.images);
   };
   // After a run: a clean end sends the next message at once (inside the end event, so the hero never
   // falls asleep in between); Stop, an error or a rejected send pause the queue instead.
@@ -153,6 +155,7 @@ function AppShell() {
 
   const workspaceActions = useWorkspaceActions({ busy, say });
   useClickThrough();
+  useBlockFileDrop();
   const windowVisibility = useWindowVisibility(game, settings.minimizeTo);
   const hide = { canHide: windowVisibility.canHide, onHide: windowVisibility.hide, to: windowVisibility.to, tray: windowVisibility.tray };
   const dragProps = useWindowDrag();
@@ -253,7 +256,19 @@ function AppShell() {
   // order unless the queue is paused (then a typed message goes out at once, as when idle).
   const mustQueue = (id: string) => run.busyNow() || (queue.items(id).length > 0 && !queue.isPaused(id));
 
-  const sendProjectPrompt = async (typed: string) => {
+  // Images go with ordinary messages only (Expedition, a queued one, an agent-tab follow-up). Slash messages hand text
+  // from step to step or run built-in commands, and a summon is never sent to Claude: those keep the draft and say why.
+  const onComposerSend = (typed: string, images: AttachedImage[]): boolean | void => {
+    if (!ws) return false;
+    if (images.length && (typed.trimStart().startsWith('/') || findSummon(typed))) {
+      persistMessage(ws.id, { kind: 'meta', text: 'Images can only go with an ordinary message, not a "/" command or a summon. Remove the images or the command.' });
+      return false;
+    }
+    void sendProjectPrompt(typed, images);
+    return undefined;
+  };
+
+  const sendProjectPrompt = async (typed: string, images: AttachedImage[] = []) => {
     if (!ws) return;
     let text = typed;
     // "summon <character>" swaps the hero and is never sent to Claude.
@@ -308,18 +323,19 @@ function AppShell() {
     // With an agent's tab open, the message goes to that agent and the view stays on it.
     const agent = agents.agents.find((a) => a.id === selectedAgentRef.current);
     if (agent) {
-      agents.message(ws, agent.id, text);
+      agents.message(ws, agent.id, text, images);
       return;
     }
     if (mustQueue(ws.id)) {
       // Claude is busy (or earlier queued messages are still ahead of this one): wait in line.
-      if (!queue.add(ws.id, text)) {
+      if (!queue.add(ws.id, text, images)) {
         persistMessage(ws.id, { kind: 'meta', text: `The queue is full (${MAX_QUEUED} messages). That one was not queued.` });
+        if (images.length) bar.discardImages(images.map((i) => i.id));
       }
       return;
     }
     agents.select(null);
-    run.send(ws.id, text, projectModel);
+    run.send(ws.id, text, projectModel, images);
   };
 
   const stop = () => {
@@ -351,7 +367,7 @@ function AppShell() {
             onClear: () => queue.clear(ws.id),
             onResume: () => queue.resume(ws.id),
           } : undefined,
-          model: projectModel, onModelChange: setProjectModel, onSend: sendProjectPrompt, onStop: stop,
+          model: projectModel, onModelChange: setProjectModel, onSend: onComposerSend, onStop: stop,
         }}
         ask={{ chat: ask, model: askModel, onModelChange: setAskModel }}
         inventory={{ ws, busy, actions: workspaceActions, onPickMap: pickMap, hide }}

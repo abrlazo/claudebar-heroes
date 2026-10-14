@@ -9,6 +9,7 @@ import { levelFor, totalTokens, xpFor } from '../lib/leveling';
 import { popXp } from '../lib/effects';
 import { formatTokens } from '../lib/format';
 import { modeChangeLine } from '../lib/permissions';
+import type { AttachedImage } from '../lib/queue';
 import type { ClaudeEvent, ModelAlias, Usage } from '../types';
 
 export interface Streaming {
@@ -78,7 +79,8 @@ export interface ClaudeRun {
   stream: StreamStore;
   /** Tokens used so far in the current run (null when idle). */
   liveUsage: Usage | null;
-  send: (wsId: string, prompt: string, model: ModelAlias) => void;
+  /** `images` are staged ids + thumbnails: the thumbnails are saved with the message, main sends the originals. */
+  send: (wsId: string, prompt: string, model: ModelAlias, images?: AttachedImage[]) => void;
   stop: () => void;
   /** Handles an inner event of a delegation that is not a shown agent as an ordinary tool line or text. */
   replay: (ev: ClaudeEvent) => void;
@@ -343,14 +345,14 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
   useBridgeEvent<ClaudeEvent>(bar.onClaudeEvent, handle);
 
   /** Save the user's prompt and start a run in the active workspace. */
-  const send = useCallback((wsId: string, prompt: string, model: ModelAlias) => {
+  const send = useCallback((wsId: string, prompt: string, model: ModelAlias, images: AttachedImage[] = []) => {
     stopped.current = false;
     sawError.current = false;
     pendingRef.current = true;
     lastWsId.current = wsId;
     setStarting(true);
-    persistMessage(wsId, { kind: 'user', text: prompt });
-    bar.send(prompt, model);
+    persistMessage(wsId, images.length ? { kind: 'user', text: prompt, images: images.map((i) => ({ thumb: i.thumb })) } : { kind: 'user', text: prompt });
+    bar.send(prompt, model, images.length ? images.map((i) => i.id) : undefined);
   }, [persistMessage]);
 
   const stop = useCallback(() => {

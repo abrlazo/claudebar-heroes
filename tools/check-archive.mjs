@@ -113,6 +113,24 @@ const mainJs = fs.readFileSync(path.join(root, 'src/main/main.js'), 'utf8');
 check('settings:set drops the archive and settings:update does not allow it', /settings:set[\s\S]{0,400}archive/.test(mainJs) && !/allowed\.archive/.test(mainJs));
 check('the ArchiveDrawer empty text matches the idle time (2 minutes)', /after 2 minutes idle/.test(fs.readFileSync(path.join(root, 'src/renderer/components/panel/ArchiveDrawer.tsx'), 'utf8')));
 
+// ----- images are never archived -----
+check('archive: user thumbnails never survive, only a clamped imageCount', (() => {
+  const t = 'data:image/jpeg;base64,AAAA';
+  const r = cleanArchived(base({ messages: [
+    { kind: 'user', text: 'a', images: [{ thumb: t }, { thumb: t }] },
+    { kind: 'user', text: 'b', imageCount: 99 },
+    { kind: 'user', text: 'c', imageCount: -4 },
+    { kind: 'assistant', text: 'd', images: [{ thumb: t }], imageCount: 3 },
+  ] }));
+  const [a, b, c, d] = r.messages;
+  return a.imageCount === 2 && !('images' in a) && b.imageCount === 5 && !('imageCount' in c) && Object.keys(d).sort().join() === 'kind,text'
+    && !JSON.stringify(r).includes('base64');
+})());
+check('archive: image counts do not change the size caps', (() => {
+  const r = cleanArchived(base({ messages: [{ kind: 'user', text: 'task' }, ...Array.from({ length: 300 }, (_, i) => ({ kind: 'user', text: `m${i}`, imageCount: 5 }))] }));
+  return r.messages.length <= MAX_ARCHIVE_MESSAGES && chars(r) <= MAX_CHAT_CHARS;
+})());
+
 // ----- idle rules (TypeScript run directly by Node) -----
 const idle = await import(pathToFileURL(path.join(root, 'src/renderer/lib/idle.ts')).href);
 const L = 120000;

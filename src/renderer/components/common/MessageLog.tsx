@@ -2,6 +2,7 @@ import { memo, useEffect, useRef } from 'react';
 import type { ChatMessage } from '../../types';
 import { Markdown, StreamingMarkdown } from './Markdown';
 import { rowKey } from '../../lib/messages';
+import { imageLabel } from '../../lib/images';
 
 /**
  * One chat message. `tool` messages render as "⚔ Name summary". `live` (the last row) parses Markdown
@@ -26,6 +27,16 @@ const Message = memo(function Message({ msg, live }: { msg: ChatMessage; live: b
   }
   if (msg.kind === 'assistant') {
     return <div className="msg assistant md">{live ? <StreamingMarkdown text={msg.text} /> : <Markdown text={msg.text} />}</div>;
+  }
+  if (msg.kind === 'user' && (msg.images?.length || msg.imageCount)) {
+    return (
+      <div className="msg user">
+        {msg.images?.length
+          ? <div className="msg-thumbs">{msg.images.map((im, i) => <img key={i} className="msg-thumb" src={im.thumb} alt={`Attached image ${i + 1}`} />)}</div>
+          : <div className="msg-images-gone">{imageLabel(msg.imageCount ?? 0)}</div>}
+        {msg.text}
+      </div>
+    );
   }
   return <div className={`msg ${msg.kind}`}>{msg.text}</div>;
 });

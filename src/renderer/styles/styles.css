@@ -505,9 +505,10 @@ body.theme-light .archive-badge.cancelled { color: #a06800; }
 .msg.error { color: #ff8080; font-size: 12px; }
 .msg.meta { color: var(--muted); font-size: 11px; text-align: center; }
 
-.composer { display: flex; gap: 6px; position: relative; }
+.composer { display: flex; flex-wrap: wrap; gap: 6px; position: relative; }
 .composer textarea {
   flex: 1;
+  min-width: 0;
   resize: none;
   background: var(--ink-2);
   border: 1px solid #3a3a5c;
@@ -516,6 +517,24 @@ body.theme-light .archive-badge.cancelled { color: #a06800; }
   outline: none;
 }
 .composer textarea:focus { border-color: var(--purple); }
+/* Image attachments: a chip row above the box, a paperclip beside it, a dashed outline while a file is dragged over. */
+.composer.drop-target { outline: 2px dashed var(--purple); outline-offset: 2px; border-radius: 6px; }
+.attach-btn { padding: 4px 8px; }
+.attach-btn:disabled { opacity: 0.5; cursor: default; }
+.attach-chips { flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-height: 64px; overflow-y: auto; }
+.attach-chip { position: relative; flex: none; width: 48px; height: 48px; border: 1px solid #3a3a5c; border-radius: 6px; background: var(--ink-2); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.attach-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attach-loading { color: var(--muted); }
+.attach-x { position: absolute; top: 0; right: 0; width: 16px; height: 16px; padding: 0; border: none; border-radius: 0 0 0 6px; background: rgba(0, 0, 0, 0.65); color: #fff; font-size: 12px; line-height: 16px; cursor: pointer; }
+.attach-count { font-size: 10px; color: var(--muted); }
+.attach-error { font-size: 11px; color: #ff8080; }
+.attach-error:empty { display: none; }
+.msg-thumbs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+.msg-thumb { height: 64px; max-width: 96px; border-radius: 4px; object-fit: cover; display: block; }
+.msg-images-gone { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
+body.theme-light .attach-x { background: rgba(0, 0, 0, 0.65); color: #fff; border: none; }
+body.theme-light .attach-chip { border-color: #d0d0d5; }
+body.theme-light .attach-error { color: #c0392b; }
 .composer .send { background: var(--purple); border-color: var(--purple); }
 .composer .stop { background: #b23a48; border-color: #b23a48; }
 

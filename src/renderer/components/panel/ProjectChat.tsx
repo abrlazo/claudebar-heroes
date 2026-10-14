@@ -11,7 +11,8 @@ import type { ClaudeRun } from '../../hooks/useClaudeRun';
 import { usageLine } from '../../hooks/useClaudeRun';
 import type { PermissionsApi } from '../../hooks/usePermissions';
 import type { WorkspaceActions } from '../../hooks/useWorkspaceActions';
-import type { QueuedMessage } from '../../lib/queue';
+import type { AttachedImage, QueuedMessage } from '../../lib/queue';
+import { useImageAttachments } from '../../hooks/useImageAttachments';
 import { forOwner, PERMISSION_MODE_OPTIONS } from '../../lib/permissions';
 import type { ChatMessage, ModelAlias, PermissionMode, Workspace } from '../../types';
 
@@ -40,7 +41,8 @@ export interface ProjectChatProps {
   queue?: QueueView;
   model: ModelAlias;
   onModelChange: (model: ModelAlias) => void;
-  onSend: (text: string) => void;
+  /** Returns false when the message was refused and the draft (and its images) should stay. */
+  onSend: (text: string, images: AttachedImage[]) => boolean | void;
   onStop: () => void;
   workspaceActions: WorkspaceActions;
   /** The archive drawer beside the panel. */
@@ -69,6 +71,7 @@ export function ProjectChat({
 }: ProjectChatProps & { visible: boolean }) {
   const { settings, updateSettings } = useSettings();
   const { suggestions, refresh: refreshCommands } = useCommandCatalog(ws?.id ?? null);
+  const images = useImageAttachments();
   const agent = agents.agents.find((a) => a.id === agents.selectedId);
   const messages = agent ? agent.log : ws?.messages || [];
   const liveUsage = !agent && run.running ? run.liveUsage : null;
@@ -124,7 +127,8 @@ export function ProjectChat({
           </div>
           {queue.items.map((item) => (
             <div key={item.id} className="queue-item" title={item.text}>
-              <span className="queue-text">{item.text}</span>
+              <span className="queue-text">{item.text || '(images only)'}</span>
+              {item.images?.length ? <span className="queue-badge">{`+${item.images.length} img`}</span> : null}
               <span className="queue-badge">queued</span>
               <button type="button" className="queue-x" aria-label="Remove queued message" onClick={() => queue.onRemove(item.id)}>×</button>
             </div>
@@ -137,6 +141,7 @@ export function ProjectChat({
         disabled={!ws || !!agent?.observed}
         queueable={!agent}
         onSend={onSend}
+        images={images}
         suggestions={suggestions}
         onSuggestionsOpen={refreshCommands}
         onStop={agent && !agent.observed && ws ? () => agents.stop(ws.id, agent.id) : onStop}

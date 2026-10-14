@@ -10,6 +10,7 @@ import type { AgentInvocation } from '../lib/agents';
 import type { GameApi } from './useGameEngine';
 import type { PermissionsApi } from './usePermissions';
 import type { AgentDefinition, AgentEvent, ArchivedAgent, ChatMessage, ClaudeEvent, Hero, Usage, Workspace } from '../types';
+import type { AttachedImage } from '../lib/queue';
 
 const DEATH_ANIMATION_MS = 600;
 
@@ -99,7 +100,8 @@ export interface AgentsApi {
    */
   spawn: (ws: Workspace, definition: AgentDefinition, task: string, chain?: ChainSpec) => Promise<void>;
   /** Sends a follow-up message to a finished agent by resuming its session. */
-  message: (ws: Workspace, agentId: string, prompt: string) => void;
+  /** A follow-up to a finished agent. `images` are staged ids + thumbnails (their bytes live in main). */
+  message: (ws: Workspace, agentId: string, prompt: string, images?: AttachedImage[]) => void;
   /** Cancels one running agent. */
   stop: (wsId: string, agentId: string) => void;
   stopAll: (wsId: string) => void;
@@ -377,17 +379,19 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
 
   spawnRef.current = spawn;
 
-  const message = useCallback((ws: Workspace, agentId: string, prompt: string) => {
+  const message = useCallback((ws: Workspace, agentId: string, prompt: string, images: AttachedImage[] = []) => {
     const agent = agentsRef.current.find((a) => a.id === agentId);
-    if (!agent || agent.status === 'running' || agent.observed) return; // observed agents have no process to resume
+    const dropImages = () => { if (images.length) bar.discardImages(images.map((i) => i.id)); };
+    if (!agent || agent.status === 'running' || agent.observed) { dropImages(); return; } // observed agents have no process to resume
     if (!agent.sessionId) {
+      dropImages();
       update(agentId, (a) => ({ ...a, log: appendLog(a.log, { kind: 'error', text: 'This agent has no session to continue.' }) }));
       return;
     }
     stopped.current.delete(agentId);
-    update(agentId, (a) => ({ ...a, status: 'running', outcome: undefined, endedAt: undefined, lastActivityAt: Date.now(), log: appendLog(a.log, { kind: 'user', text: prompt }) }));
+    update(agentId, (a) => ({ ...a, status: 'running', outcome: undefined, endedAt: undefined, lastActivityAt: Date.now(), log: appendLog(a.log, images.length ? { kind: 'user', text: prompt, images: images.map((i) => ({ thumb: i.thumb })) } : { kind: 'user', text: prompt }) }));
     game.wake();
-    bar.messageAgent(ws.id, agentId, agent.sessionId, agent.definition, prompt, ws.path);
+    bar.messageAgent(ws.id, agentId, agent.sessionId, agent.definition, prompt, ws.path, images.length ? images.map((i) => i.id) : undefined);
   }, [game, update]);
 
   const logMeta = useCallback((agentId: string, text: string) => {
