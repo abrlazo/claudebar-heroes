@@ -17,7 +17,8 @@ export type DrawerMode = 'left' | 'right' | 'overlay';
 /** A chat entry. Tool calls carry a name/summary, everything else text. */
 export type ChatMessage =
   | { kind: 'tool'; name: string; summary?: string }
-  | { kind: 'user' | 'assistant' | 'error' | 'meta' | 'thinking'; text: string };
+  | { kind: 'user'; text: string; images?: { thumb: string }[]; imageCount?: number }
+  | { kind: 'assistant' | 'error' | 'meta' | 'thinking'; text: string };
 
 /** Something that can follow a "/" in the chat: an agent, a skill, a custom command, or a built-in Claude Code command. */
 export interface CommandEntry {
@@ -284,7 +285,12 @@ export interface Bar {
   quit(): void;
   restartApp(): void;
 
-  send(prompt: string, model: ModelAlias): void;
+  /** `imageIds` are ids from `stageImage`; main owns the bytes. */
+  send(prompt: string, model: ModelAlias, imageIds?: string[]): void;
+  /** Gives main the bytes of an attached image. Main checks them (type, size, header), keeps them and answers an id plus a small thumbnail, or a fixed refusal message. */
+  stageImage(bytes: ArrayBuffer): Promise<{ ok: true; id: string; thumb: string; size: number } | { ok: false; code: string; message: string }>;
+  /** Forgets staged images (removed chips, abandoned drafts). */
+  discardImages(ids: string[]): void;
   cancel(): void;
   newSession(): Promise<Settings>;
   info(): Promise<{ bin: string }>;
@@ -301,7 +307,7 @@ export interface Bar {
     wsId: string, definitionName: string, displayName: string, task: string,
   ): Promise<{ agent?: AgentRecord; definitionName?: string; error?: string }>;
   messageAgent(
-    wsId: string, agentId: string, sessionId: string, definitionName: string, prompt: string, cwd: string,
+    wsId: string, agentId: string, sessionId: string, definitionName: string, prompt: string, cwd: string, imageIds?: string[],
   ): void;
   /** Whether the project has .claude/review.md (the path comes from the workspace). */
   projectHasReview(wsId: string): Promise<boolean>;

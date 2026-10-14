@@ -9,6 +9,7 @@ const { nextDelay } = require('./write-schedule');
 const { coerceFlag } = require('./notify');
 const { coerceMode } = require('./window-visibility');
 const { cleanBubblePos } = require('./bubble-geometry');
+const { cleanMessageImages, trimOldThumbs } = require('./images');
 
 const DEFAULTS = {
   permissionMode: 'default',
@@ -117,7 +118,11 @@ function load() {
   s.workspaces = s.workspaces.map(({ xp, ...w }) => ({
     usage: emptyUsage(), lastContext: 0, contextWindow: 200000, messages: [], agents: [], archive: [], trophies: {}, achievements: {}, heroDesign: null, ...w,
     // No agent process survives a restart and nothing reads these stale records, so start clean.
-  })).map((w) => ({ ...w, agents: [], stats: cleanStats(w.stats), archive: cleanArchive(w.archive) }));
+  })).map((w) => ({
+    ...w, agents: [], stats: cleanStats(w.stats), archive: cleanArchive(w.archive),
+    // A saved message may only carry thumbnails main would have accepted (see images.js).
+    messages: Array.isArray(w.messages) ? trimOldThumbs(w.messages.map(cleanMessageImages)) : [],
+  }));
   // One-time resets of the trophy shelf: bosses became rare (V1), then rarer (1%) with a legendary one (V2).
   // Kills, map and everything else stay.
   s.migrations = { ...(raw.migrations && typeof raw.migrations === 'object' && !Array.isArray(raw.migrations) ? raw.migrations : {}) };
@@ -271,7 +276,8 @@ function addMessage(wsId, message) {
   const ws = s.workspaces.find((w) => w.id === wsId);
   if (!ws) return null;
   ws.messages = ws.messages || [];
-  ws.messages.push(message);
+  ws.messages.push(cleanMessageImages(message)); // image fields are rebuilt from an allowlist
+  trimOldThumbs(ws.messages);
   // The whole file is rewritten on every message; keep history bounded.
   if (ws.messages.length > MAX_MESSAGES) ws.messages.splice(0, ws.messages.length - MAX_MESSAGES);
   return set({ workspaces: s.workspaces });

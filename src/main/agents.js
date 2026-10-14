@@ -6,7 +6,7 @@ const agents = new Map(); // agentId -> { handle, emit }
 
 // Starts an agent (`definitionName` = the .claude/agents file it runs as). Pass `sessionId` to continue an earlier run of the same agent
 // (a follow-up message) instead of starting a fresh conversation.
-function spawn({ wsId, agentId, agentName, definitionName = null, prompt, cwd, permissionMode, sessionId = null }, onEvent) {
+function spawn({ wsId, agentId, agentName, definitionName = null, prompt, cwd, permissionMode, sessionId = null, images = [] }, onEvent) {
   if (agents.has(agentId)) {
     onEvent({ type: 'error', message: `Agent ${agentName} is already running` });
     return;
@@ -20,7 +20,7 @@ function spawn({ wsId, agentId, agentName, definitionName = null, prompt, cwd, p
 
   // Every agent process runs in host mode (the footer mode can then change while it works); main picks the mode, see main.js.
   const promptMode = claude.projectPromptMode(permissionMode);
-  const handle = claude.run({ prompt, cwd, sessionId, permissionMode, agent: definitionName, promptMode }, (event) => {
+  const handle = claude.run({ prompt, cwd, sessionId, permissionMode, agent: definitionName, promptMode, images }, (event) => {
     if (event.type === 'session') {
       settings.updateAgent(wsId, agentId, { sessionId: event.sessionId });
     } else if (event.type === 'usage') {

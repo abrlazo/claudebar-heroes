@@ -8,6 +8,7 @@ const MAX_ARCHIVED = 20; // chats per project, the oldest are dropped
 const MAX_ARCHIVE_MESSAGES = 200; // messages per chat (the first one, the task, is always kept)
 const MAX_MESSAGE_CHARS = 4000; // characters per message text
 const MAX_CHAT_CHARS = 40000; // characters per chat in total
+const MAX_IMAGE_COUNT = 5; // an archived message only remembers how many images it had
 const MAX_INPUT_MESSAGES = 1000; // looked at per chat before the caps (cheap cut for hostile input)
 const NUMBER_CAP = 1e12; // token counts
 const TIME_CAP = 8.64e15; // the largest time a JS Date can hold; real timestamps (about 1.8e12) must pass through
@@ -33,7 +34,16 @@ function cleanMessage(raw) {
     if (typeof raw.summary === 'string' && raw.summary) msg.summary = raw.summary.slice(0, 300);
     return msg;
   }
-  if (TEXT_KINDS.includes(raw.kind)) return { kind: raw.kind, text: str(raw.text, MAX_MESSAGE_CHARS) };
+  if (TEXT_KINDS.includes(raw.kind)) {
+    const msg = { kind: raw.kind, text: str(raw.text, MAX_MESSAGE_CHARS) };
+    // Images are never archived: only how many there were (from the thumbnails or an earlier count).
+    if (raw.kind === 'user') {
+      const n = Array.isArray(raw.images) ? raw.images.length : raw.imageCount;
+      const count = Number.isFinite(n) ? Math.max(0, Math.min(MAX_IMAGE_COUNT, Math.floor(n))) : 0;
+      if (count > 0) msg.imageCount = count;
+    }
+    return msg;
+  }
   return null;
 }
 

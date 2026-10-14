@@ -14,6 +14,7 @@ const notify = require('./notify');
 const visibility = require('./window-visibility');
 const bubbleState = require('./bubble-state');
 const bubbleGeo = require('./bubble-geometry');
+const chatImages = require('./images');
 
 // Windows shows toasts only for an app with an AppUserModelId.
 if (process.platform === 'win32') app.setAppUserModelId('com.claudebar.heroes');
@@ -35,6 +36,8 @@ const PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
 const TOGGLE_SHORTCUT = 'CommandOrControl+Shift+Space';
 
 let win = null;
+const staging = chatImages.createStaging(); // images attached in the composer, waiting for a send (memory only)
+let stagingTimer = null;
 let tray = null;
 let stripPos = null;       // top-left of the strip, in screen coordinates
 let panelOpen = false;
@@ -877,12 +880,66 @@ function registerIpc() {
     return drawerOpen ? drawerMode : 'none';
   });
 
+  // ----- Chat images. Bytes arrive once, here; a send carries only the ids main made. -----
+  // Takes the staged images for a send. Plain (non-host) processes cannot carry image blocks, so those are refused
+  // before anything is consumed. Answers { images } or { error } with a fixed text.
+  function takeImages(ids, promptMode) {
+    if (promptMode !== 'host') return { error: 'Images need a newer Claude Code (permission prompts support). Update it and try again.' };
+    const got = staging.take(ids);
+    if (!got) return { error: 'An attached image expired. Attach it again.' };
+    const code = chatImages.validateBatch(got);
+    if (code) return { error: chatImages.MESSAGES[code] };
+    return { images: got.map(({ mime, buffer }) => ({ mime, buffer })) };
+  }
+
+  // A small JPEG data URL of the image, made by main (the renderer never decodes the original).
+  function makeThumb(buffer, size) {
+    const img = nativeImage.createFromBuffer(buffer);
+    if (img.isEmpty()) return null;
+    const small = img.resize({ width: Math.max(1, Math.min(96, size.width)) });
+    for (const quality of [60, 40, 25]) {
+      const url = `data:image/jpeg;base64,${small.toJPEG(quality).toString('base64')}`;
+      if (chatImages.goodThumb(url)) return url;
+    }
+    return null;
+  }
+
+  ipcMain.handle('images:stage', (e, payload) => {
+    const fail = (code) => ({ ok: false, code, message: chatImages.MESSAGES[code] });
+    if (e.sender !== win?.webContents) return fail('unreadable');
+    const bytes = payload && typeof payload === 'object' ? payload.bytes : null;
+    const isBytes = bytes instanceof ArrayBuffer || ArrayBuffer.isView(bytes);
+    if (!isBytes) return fail('unreadable');
+    // The size is checked before anything is copied.
+    if (bytes.byteLength > chatImages.MAX_IMAGE_BYTES) return fail('too-big');
+    const buffer = ArrayBuffer.isView(bytes)
+      ? Buffer.from(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
+      : Buffer.from(bytes.slice(0));
+    const v = chatImages.validateImage(buffer);
+    if (!v.ok) return fail(v.code);
+    let thumb = null;
+    try { thumb = makeThumb(buffer, v); } catch { /* an image the OS cannot decode */ }
+    if (!thumb) return fail('unreadable');
+    const added = staging.add({ mime: v.mime, buffer, thumb });
+    if (!added.ok) return fail(added.code);
+    return { ok: true, id: added.id, thumb, size: buffer.length };
+  });
+
+  ipcMain.on('images:discard', (e, payload) => {
+    if (e.sender !== win?.webContents) return;
+    const ids = payload && typeof payload === 'object' ? payload.ids : null;
+    if (Array.isArray(ids) && ids.length <= chatImages.MAX_IMAGES) staging.discard(ids.filter((id) => typeof id === 'string' && id.length <= 100));
+  });
+  stagingTimer = setInterval(() => staging.sweep(), 5 * 60 * 1000);
+  stagingTimer.unref?.();
+
   ipcMain.on('claude:send', (_e, payload) => {
     // Accept the old string form too.
-    const { prompt, model } = typeof payload === 'string' ? { prompt: payload } : (payload || {});
+    const { prompt, model, imageIds } = typeof payload === 'string' ? { prompt: payload } : (payload || {});
     const ws = settings.active();
     const emit = (event) => win?.webContents.send('claude:event', event);
-    if (!prompt) return;
+    const withImages = imageIds !== undefined && imageIds !== null;
+    if (!prompt && !withImages) return;
     if (mainHandle?.running) {
       emit({ type: 'error', message: 'Claude is already working on something.' });
       return;
@@ -895,13 +952,20 @@ function registerIpc() {
       emit({ type: 'error', message: `Project folder not found: ${ws.path}` });
       return;
     }
-    runningWsId = ws.id;
     const permissionMode = settings.get().permissionMode;
+    // The existing guards come first, so a refused send never consumes the staged images.
+    let images = [];
+    if (withImages) {
+      const got = takeImages(imageIds, claude.projectPromptMode(permissionMode));
+      if (got.error) { emit({ type: 'error', message: got.error }); return; }
+      images = got.images;
+    }
+    runningWsId = ws.id;
     const tracker = notify.createTracker({ kind: 'quest', wsId: ws.id, label: ws.name });
     questTracker = tracker;
     mainHandle = claude.run(
       // Host mode always: Claude asks through the app (permission events) and the footer mode can change mid-run.
-      { prompt, cwd: ws.path, sessionId: ws.sessionId, permissionMode, model, promptMode: claude.projectPromptMode(permissionMode) },
+      { prompt: typeof prompt === 'string' ? prompt : '', cwd: ws.path, sessionId: ws.sessionId, permissionMode, model, promptMode: claude.projectPromptMode(permissionMode), images },
       (event) => {
         observeRun(tracker, event);
         // Everything is saved to the workspace that started the run.
@@ -1054,8 +1118,9 @@ function registerIpc() {
   });
 
   // Follow-up message to an existing agent: resume its Claude session, as the same agent.
-  ipcMain.on('agents:message', (_e, { wsId, agentId, sessionId, definitionName, prompt } = {}) => {
-    if (!prompt || typeof sessionId !== 'string' || !sessionId) return;
+  ipcMain.on('agents:message', (_e, { wsId, agentId, sessionId, definitionName, prompt, imageIds } = {}) => {
+    const withImages = imageIds !== undefined && imageIds !== null;
+    if ((!prompt && !withImages) || typeof sessionId !== 'string' || !sessionId) return;
     const ws = settings.get().workspaces.find((w) => w.id === wsId);
     if (!ws) return;
     const emit = (event) => win?.webContents.send('agent:event', event);
@@ -1065,12 +1130,19 @@ function registerIpc() {
       emit({ agentId, type: 'error', message: `Agent definition "${definitionName}" is gone from .claude/agents.` });
       return;
     }
+    let images = [];
+    if (withImages) {
+      if (agents.isRunning(agentId)) { emit({ agentId, type: 'error', message: 'Agent is already running' }); return; }
+      const got = takeImages(imageIds, claude.projectPromptMode(settings.get().permissionMode));
+      if (got.error) { emit({ agentId, type: 'error', message: got.error }); return; }
+      images = got.images;
+    }
     // The saved record is gone a few seconds after a run, so the label comes from the definition.
     const record = (ws.agents || []).find((a) => a.id === agentId);
     const tracker = notify.createTracker({ kind: 'agent', wsId, agentId, label: record?.name || definition?.name || 'Agent' });
     agents.spawn({
-      wsId, agentId, agentName: 'Agent', definitionName: definition?.name ?? null, prompt, cwd: ws.path,
-      permissionMode: settings.get().permissionMode, sessionId,
+      wsId, agentId, agentName: 'Agent', definitionName: definition?.name ?? null, prompt: typeof prompt === 'string' ? prompt : '', cwd: ws.path,
+      permissionMode: settings.get().permissionMode, sessionId, images,
     }, (event) => {
       observeAgent(tracker, agentId, event);
       emit(event);
@@ -1186,6 +1258,8 @@ app.on('will-quit', () => {
   if (!gotLock) return; // a second launch never loaded anything: flushing would write an empty settings file
   quitting = true; // runs cancelled below must not notify
   clearInterval(commandTimer);
+  clearInterval(stagingTimer);
+  staging.clear();
   clearInterval(dragTimer);
   stopBubblePoll();
   if (bubbleLive()) bubbleWin.destroy();

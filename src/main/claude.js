@@ -78,11 +78,12 @@ function permissionTimeoutMs() {
  * @param {string} opts.cwd
  * @param {string|null} opts.sessionId  resume this session if set
  * @param {string} opts.permissionMode
+ * @param {{mime: string, buffer: Buffer}[]} [opts.images]  image blocks for the prompt, host mode only (main refuses them in plain mode)
  * @param {'plain'|'host'} [opts.promptMode]  'host' = Claude asks the app for permission (see HOST_ARGS); default 'plain'
  * @param {(event: object) => void} emit
  * @returns {{cancel: function, running: boolean, answerPermission: function, pendingPermissions: function}} handle
  */
-function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode = 'plain' }, emit) {
+function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode = 'plain', images = [] }, emit) {
   const host = promptMode === 'host';
   // The mode the process really enforces: what it started with, then what Claude confirmed (set_permission_mode).
   let mode = permissions.isMode(permissionMode) ? permissionMode : 'default';
@@ -236,7 +237,7 @@ function run({ prompt, cwd, sessionId, permissionMode, model, agent, promptMode 
   child.stdin.on('error', () => {});
   // Prompt goes over stdin so quoting and length are never an issue. In host mode the pipe stays open (Claude
   // needs it for the answers) until the `result` event; closing it early makes Claude finish without asking.
-  if (host) writeLine(permissions.buildUserLine(prompt));
+  if (host) writeLine(permissions.buildUserLine(prompt, images));
   else child.stdin.end(prompt);
 
   const stderr = createCapped();
