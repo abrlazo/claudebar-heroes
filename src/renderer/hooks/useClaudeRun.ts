@@ -66,8 +66,20 @@ export interface RunEnd {
   stopped: boolean;
 }
 
+/** What the workflow pipeline shows of the Expedition run: changes per tool call, never per text frame. Kept after the run ends (final state) until the next one starts. */
+export interface RunActivity {
+  wsId: string | null;
+  startedAt: number;
+  lastTool?: { name: string; summary?: string };
+  toolCount: number;
+  endedAt?: number;
+  outcome?: 'done' | 'failed' | 'cancelled';
+}
+
 export interface ClaudeRun {
   running: boolean;
+  /** The current (or last) run's progress for the pipeline; null before the first run. */
+  activity: RunActivity | null;
   /** true from `send` until the run's first event (start / error / end): bridges the gap before `running`. */
   starting: boolean;
   /** Synchronous busy check (running or about to run) for code that outlives a render. */
@@ -117,6 +129,7 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
   const { getSettings, persistMessage, patchWorkspaceLocal } = useSettings();
   const [running, setRunning] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [activity, setActivity] = useState<RunActivity | null>(null);
   // Synchronous mirrors of running / starting, plus how the current run is going.
   const pendingRef = useRef(false);
   const runningRef = useRef(false);
@@ -194,6 +207,7 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
         cancelStream();
         setStreaming(EMPTY_STREAM);
         setLiveUsage(EMPTY_USAGE);
+        setActivity({ wsId: runWsId.current, startedAt: Date.now(), toolCount: 0 });
         setRunning(true);
         game.wake();
         setStatus('Meditating…');
@@ -235,6 +249,7 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
         if (runWsId.current) {
           persistMessage(runWsId.current, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary });
         }
+        setActivity((a) => (a ? { ...a, lastTool: { name: ev.name ?? 'tool', summary: ev.summary }, toolCount: a.toolCount + 1 } : a));
         game.toolEnemy(ev.name ?? '');
         setStatus(`⚔ ${ev.name}${ev.summary ? `: ${ev.summary}` : ''}`);
         break;
@@ -319,6 +334,8 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
           runWsId.current = null;
           pendingRef.current = false;
           runningRef.current = false;
+          setActivity((a) => (a && a.endedAt === undefined
+            ? { ...a, endedAt: Date.now(), outcome: info.stopped ? 'cancelled' : info.clean ? 'done' : 'failed' } : a));
           setStarting(false);
           setActiveRunWsId(null);
           setLiveUsage(null);
@@ -359,5 +376,5 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
   }, []);
   const busyNow = useCallback(() => pendingRef.current || runningRef.current, []);
 
-  return { running, starting, busyNow, runWsId: activeRunWsId, stream, liveUsage, send, stop, replay };
+  return { running, activity, starting, busyNow, runWsId: activeRunWsId, stream, liveUsage, send, stop, replay };
 }

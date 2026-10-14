@@ -9,7 +9,7 @@ const agents = require('./agents');
 const agentDefinitions = require('./agent-definitions');
 const commandCatalog = require('./command-catalog');
 const heroDesign = require('./hero-design');
-const { DRAWER_EXTRA, chooseDrawerMode, windowRect } = require('./drawer-layout');
+const { DRAWER_EXTRA, PIPE_EXTRA, choosePanes, windowRect } = require('./drawer-layout');
 const notify = require('./notify');
 const visibility = require('./window-visibility');
 const bubbleState = require('./bubble-state');
@@ -21,8 +21,8 @@ if (process.platform === 'win32') app.setAppUserModelId('com.claudebar.heroes');
 // The window is a transparent, frameless box that holds the hero strip. It
 // can be dragged anywhere (even over the taskbar) and remembers its spot.
 // Opening the chat panel grows the window upward, or downward when there
-// isn't room above. While the archive drawer is open the window also grows sideways
-// (left of the strip, else right, else not at all); `stripPos` never changes for it.
+// isn't room above. While the archive drawer or the workflow pipeline pane is open the window also grows
+// sideways (drawer-layout.js: left of the strip, else right, else not at all); `stripPos` never changes for it.
 // Transparent areas are click-through.
 const WIN_WIDTH = 560;
 const STRIP_H = 96;
@@ -41,6 +41,8 @@ let panelOpen = false;
 let panelSide = 'above';
 let drawerOpen = false;     // archive drawer beside the panel (only while the panel is open)
 let drawerMode = 'left';    // 'left' | 'right' | 'overlay', chosen when it opens
+let pipelineOpen = false;  // workflow pipeline pane (only while the panel is open; memory only)
+let pipelineMode = 'inline'; // 'left' | 'right' | 'inline', chosen when it opens and re-chosen when the drawer or the strip moves
 let dragTimer = null;
 let panelHeight = DEFAULT_PANEL_HEIGHT;
 let runningWsId = null;     // workspace of the Claude run in progress
@@ -98,24 +100,49 @@ function windowY() {
   return panelOpen && panelSide === 'above' ? stripPos.y - panelHeight : stripPos.y;
 }
 
-// Where the drawer would go for the strip's current spot (measured on the display it is on).
-function currentDrawerMode() {
+// Where the panes would go for the strip's current spot (measured on the display it is on). `drawerWanted` /
+// `pipelineWanted` say which panes to place; the pipeline avoids the side the drawer takes (see drawer-layout.js).
+function currentPanes({ drawerWanted, pipelineWanted }) {
   // Test seam (environment of the main process only, never reachable from the renderer): the simulation runs on
   // large displays where 'overlay' cannot happen, so it forces that mode.
-  if (process.env.CBH_FORCE_DRAWER_MODE === 'overlay') return 'overlay';
+  const drawerForced = process.env.CBH_FORCE_DRAWER_MODE === 'overlay' ? 'overlay' : undefined;
   const { workArea } = screen.getDisplayNearestPoint({ x: stripPos.x, y: stripPos.y });
-  return chooseDrawerMode(stripPos.x, WIN_WIDTH, workArea);
+  const panes = choosePanes({ stripX: stripPos.x, stripW: WIN_WIDTH, area: workArea, drawerWanted, pipelineWanted, drawerForced });
+  // Second test seam: a fixed pipeline mode (bad values are ignored).
+  const forced = process.env.CBH_FORCE_PIPELINE_MODE;
+  if (pipelineWanted && (forced === 'left' || forced === 'right' || forced === 'inline')) panes.pipeline = forced;
+  return panes;
+}
+
+function currentDrawerMode() {
+  return currentPanes({ drawerWanted: true, pipelineWanted: false }).drawer;
+}
+
+// Where the pipeline would go, given whether the drawer is open (or about to be, `withDrawer`).
+function currentPipelineMode(withDrawer = drawerOpen) {
+  return currentPanes({ drawerWanted: withDrawer, pipelineWanted: true }).pipeline;
 }
 
 // The window grows to the left of the strip in 'left' mode, so its x is the strip's minus that.
 function leftExtra() {
-  return drawerOpen && panelOpen && drawerMode === 'left' ? DRAWER_EXTRA : 0;
+  if (!panelOpen) return 0;
+  return (drawerOpen && drawerMode === 'left' ? DRAWER_EXTRA : 0) + (pipelineOpen && pipelineMode === 'left' ? PIPE_EXTRA : 0);
+}
+
+// The drawer or the strip changed: the pipeline may have to move to another side (or inline). Tells the renderer.
+function refreshPipelineMode() {
+  if (!pipelineOpen) return;
+  const next = currentPipelineMode();
+  if (next !== pipelineMode) {
+    pipelineMode = next;
+    win?.webContents.send('panel:pipelineMode', pipelineMode);
+  }
 }
 
 function applyBounds() {
   if (!win) return;
   win.setBounds(windowRect({
-    stripPos, stripW: WIN_WIDTH, stripH: STRIP_H, panelOpen, panelSide, panelHeight, drawerOpen, drawerMode,
+    stripPos, stripW: WIN_WIDTH, stripH: STRIP_H, panelOpen, panelSide, panelHeight, drawerOpen, drawerMode, pipelineOpen, pipelineMode,
   }));
 }
 
@@ -131,6 +158,7 @@ function resetPosition() {
     drawerMode = currentDrawerMode();
     win?.webContents.send('panel:drawerMode', drawerMode);
   }
+  refreshPipelineMode();
   settings.set({ windowPos: null });
   applyBounds();
 }
@@ -602,6 +630,7 @@ function applyVisibility(action, reason) {
     } else if (effect === 'close-panel') {
       panelOpen = false;
       drawerOpen = false;
+      pipelineOpen = false;
       applyBounds();
     } else if (effect === 'hide-window') {
       setMouseIgnored(true);
@@ -651,7 +680,7 @@ function logWindow(entry) {
   if (!file) return;
   try {
     fs.appendFileSync(file, `${JSON.stringify({
-      at: Date.now(), ...entry, visible: !vis.hidden(), canHide: vis.canHide(), mode: vis.mode(), panelOpen, drawerOpen, pos: stripPos, ignore: mouseIgnored,
+      at: Date.now(), ...entry, visible: !vis.hidden(), canHide: vis.canHide(), mode: vis.mode(), panelOpen, drawerOpen, pipelineOpen, pos: stripPos, ignore: mouseIgnored,
     })}\n`);
   } catch { /* the log is only a test aid */ }
 }
@@ -851,6 +880,7 @@ function registerIpc() {
         win?.webContents.send('panel:drawerMode', drawerMode);
       }
     }
+    refreshPipelineMode();
     applyBounds();
     settings.set({ windowPos: stripPos });
   });
@@ -859,7 +889,7 @@ function registerIpc() {
 
   ipcMain.handle('panel:setOpen', (_e, open) => {
     panelOpen = open === true && !vis.hidden(); // a late call cannot grow a hidden window
-    if (!panelOpen) drawerOpen = false; // the drawer is a companion of the panel
+    if (!panelOpen) { drawerOpen = false; pipelineOpen = false; } // the drawer and the pipeline are companions of the panel
     if (panelOpen) panelSide = chooseSide();
     applyBounds();
     return panelSide;
@@ -873,8 +903,21 @@ function registerIpc() {
     if (open && (!panelOpen || vis.hidden())) return 'none';
     drawerOpen = open;
     if (open) drawerMode = currentDrawerMode();
+    refreshPipelineMode(); // the drawer wins the side it takes; the pipeline moves on (maybe inline)
     applyBounds();
     return drawerOpen ? drawerMode : 'none';
+  });
+
+  // Same for the workflow pipeline pane: the renderer only asks, main picks the mode and the window rectangle.
+  ipcMain.handle('panel:pipelineMode', () => currentPipelineMode());
+
+  ipcMain.handle('panel:setPipeline', (_e, open) => {
+    if (open !== true && open !== false) return pipelineOpen ? pipelineMode : 'none';
+    if (open && (!panelOpen || vis.hidden())) return 'none';
+    pipelineOpen = open;
+    if (open) pipelineMode = currentPipelineMode();
+    applyBounds();
+    return pipelineOpen ? pipelineMode : 'none';
   });
 
   ipcMain.on('claude:send', (_e, payload) => {

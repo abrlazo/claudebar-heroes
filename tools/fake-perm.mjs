@@ -117,7 +117,29 @@ const settle = (name, response, make) => {
   else { toolResult(response.message ?? 'denied', true); say(`perm denied ${name}: ${response.message ?? ''}`); }
 };
 
-if (prompt.includes('PERMALLOW')) {
+// Pipeline simulation prompts (tools/simulate-pipeline.mjs): PIPELONG = six tool calls with text in between (~9 s, clean),
+// PIPETEXT = one tool call, then only streamed text for ~4 s, PIPEQUICK = one tool call, clean after ~2.5 s,
+// PIPEFAIL = one tool call, then an error result after ~1.5 s.
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+if (prompt.includes('PIPELONG')) {
+  for (let i = 1; i <= 6; i++) { toolUse('Bash', { command: `step ${i}` }); say(`step ${i} `); await pause(1500); }
+  say('long done');
+  finish();
+} else if (prompt.includes('PIPETEXT')) {
+  toolUse('Read', { file_path: '/repo/text.ts' });
+  for (let i = 0; i < 40; i++) { say(`chunk ${i} `); await pause(100); }
+  finish();
+} else if (prompt.includes('PIPEQUICK')) {
+  toolUse('Read', { file_path: '/repo/quick.ts' });
+  await pause(2500);
+  say('quick done');
+  finish();
+} else if (prompt.includes('PIPEFAIL')) {
+  toolUse('Bash', { command: 'false' });
+  await pause(1500);
+  out({ type: 'result', subtype: 'error_during_execution', is_error: true, session_id: sid, total_cost_usd: 0, num_turns: 1, duration_ms: 100 });
+  setTimeout(() => process.exit(1), 100);
+} else if (prompt.includes('PERMALLOW')) {
   ask('req-allow-1', 'Bash', { command: 'mkdir perm-allow-dir', description: 'Make a directory' });
   const r = await waitFor('req-allow-1');
   settle('one', r, () => fs.mkdirSync(path.join(process.cwd(), 'perm-allow-dir'), { recursive: true }));

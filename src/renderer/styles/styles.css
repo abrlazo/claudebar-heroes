@@ -362,12 +362,80 @@ body.theme-light .agent-tab .idle.quiet { color: #a06800; }
 .agent-tab.active .idle { opacity: 0.8; }
 .archive-pill { margin-left: auto; flex: none; }
 
+/* ---------- Workflow pipeline pane (beside the panel, or inline at the top of it) ---------- */
+
+#pipeline-pane {
+  position: absolute;
+  top: 0;
+  bottom: calc(var(--strip-h) + 8px);
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  background: rgba(26, 26, 46, var(--panel-bg-alpha));
+  border: 2px solid var(--purple);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  z-index: 6;
+  font-size: 12px;
+  animation: drawer-in-right 0.16s ease-out;
+}
+body.panel-below #pipeline-pane { top: calc(var(--strip-h) + 8px); bottom: 0; }
+body.pipe-left #pipeline-pane.left { left: 0; animation-name: drawer-in-left; }
+body.pipe-right #pipeline-pane.right { left: calc(var(--pane-left) + var(--main-w) + 8px); }
+/* No room beside the panel: a compact block at the top of the panel, the window does not grow. */
+#pipeline-pane.inline {
+  position: static; width: auto; max-height: 150px; flex: none; border-width: 0 0 1px; border-radius: 0;
+  border-bottom-color: #3a3a5c; box-shadow: none; animation: none;
+}
+body.theme-light #pipeline-pane { background: rgba(245, 245, 247, var(--panel-bg-alpha)); }
+body.theme-light #pipeline-pane.inline { border-bottom-color: #d0d0d5; }
+.pipeline-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #3a3a5c; flex: none; }
+body.theme-light .pipeline-head { border-bottom-color: #d0d0d5; }
+.pipeline-title { font-weight: 700; }
+.pipeline-headline { flex: 1; min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pipeline-close { border: none; background: transparent; color: var(--muted); font-size: 16px; line-height: 1; padding: 0 4px; cursor: pointer; }
+.pipeline-close:hover { color: var(--purple); }
+.pipeline-list { list-style: none; margin: 0; padding: 6px 8px; overflow-y: auto; flex: 1; min-height: 0; }
+.pipeline-node { position: relative; padding-left: 0; }
+.pipeline-node + .pipeline-node::before { content: ''; position: absolute; left: 9px; top: -6px; height: 8px; border-left: 2px solid #3a3a5c; }
+body.theme-light .pipeline-node + .pipeline-node::before { border-left-color: #c0c0c8; }
+.pipeline-hit { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 3px 0; margin: 0 0 6px; border: none; background: transparent; color: inherit; font: inherit; text-align: left; }
+button.pipeline-hit { cursor: pointer; }
+button.pipeline-hit:hover .pipeline-label { color: var(--purple); }
+.pipeline-icon { flex: none; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--muted); display: flex; align-items: center; justify-content: center; font-size: 10px; line-height: 1; box-sizing: border-box; }
+.pipeline-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pipeline-label { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pipeline-detail { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pipeline-time { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pipeline-node.running .pipeline-icon { border-color: var(--purple); color: var(--purple); animation: pipeline-pulse 1.2s ease-in-out infinite; }
+.pipeline-node.asking .pipeline-icon { border-color: #e0a030; color: #e0a030; background: rgba(224, 160, 48, 0.15); }
+.pipeline-node.done .pipeline-icon { border-color: #4caf6a; color: #4caf6a; }
+.pipeline-node.failed .pipeline-icon { border-color: #d9534f; color: #d9534f; }
+.pipeline-node.cancelled .pipeline-icon { border-color: var(--muted); color: var(--muted); }
+.pipeline-node.waiting { opacity: 0.7; }
+.pipeline-note { padding: 0 8px 6px; color: var(--muted); flex: none; }
+.pipeline-pill { margin-left: auto; flex: none; }
+.pipeline-pill + .archive-pill { margin-left: 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@keyframes pipeline-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+/* Reduced motion: no enter animation, a static dot instead of the pulse. */
+@media (prefers-reduced-motion: reduce) {
+  #pipeline-pane { animation: none !important; }
+  .pipeline-node.running .pipeline-icon { animation: none !important; background: rgba(102, 126, 234, 0.3); }
+}
+
 /* ---------- Archive of retired / closed agent chats (a drawer beside the panel) ---------- */
 
 /* The window is --main-w wide, or 608px wider while the drawer is open (main.js). The strip and panel
    hold to the edge that does not move, so they stay put when the window grows. */
-body.drawer-left #strip, body.drawer-left #panel { left: auto; right: 0; width: var(--main-w); }
-body.drawer-right #strip, body.drawer-right #panel { left: 0; right: auto; width: var(--main-w); }
+body { --pane-left: calc(var(--drawer-l, 0px) + var(--pipe-l, 0px)); } /* what sits to the left of the strip: drawer (608px) and/or pipeline pane (288px) */
+body.drawer-left { --drawer-l: 608px; }
+body.pipe-left { --pipe-l: 288px; }
+body.drawer-left #strip, body.drawer-left #panel,
+body.drawer-right #strip, body.drawer-right #panel,
+body.pipe-left #strip, body.pipe-left #panel,
+body.pipe-right #strip, body.pipe-right #panel { left: var(--pane-left); right: auto; width: var(--main-w); }
 
 #archive-drawer {
   position: absolute;
@@ -384,9 +452,9 @@ body.drawer-right #strip, body.drawer-right #panel { left: 0; right: auto; width
 }
 body.panel-below #archive-drawer { top: calc(var(--strip-h) + 8px); bottom: 0; }
 body.drawer-left #archive-drawer { left: 0; animation: drawer-in-left 0.16s ease-out; }
-body.drawer-right #archive-drawer { left: calc(var(--main-w) + 8px); animation: drawer-in-right 0.16s ease-out; }
+body.drawer-right #archive-drawer { left: calc(var(--pane-left) + var(--main-w) + 8px); animation: drawer-in-right 0.16s ease-out; }
 /* No room beside the panel: the drawer lies over it (the panel's width). */
-body.drawer-overlay #archive-drawer { left: 0; width: var(--main-w); animation: drawer-in-right 0.16s ease-out; }
+body.drawer-overlay #archive-drawer { left: var(--pane-left); width: var(--main-w); animation: drawer-in-right 0.16s ease-out; }
 body.drawer-open #archive-drawer:not([hidden]) { display: flex; }
 @keyframes drawer-in-left { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
 @keyframes drawer-in-right { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: none; } }

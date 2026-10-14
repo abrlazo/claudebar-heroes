@@ -3,6 +3,7 @@ import { SettingsProvider, useActiveWorkspace, useSettings } from './context/Set
 import { Strip } from './components/strip/Strip';
 import { Panel } from './components/panel/Panel';
 import { ArchiveDrawer } from './components/panel/ArchiveDrawer';
+import { PipelinePane } from './components/panel/PipelinePane';
 import { useGameEngine } from './hooks/useGameEngine';
 import { useStageStatus } from './hooks/useStageStatus';
 import { useAchievements } from './hooks/useAchievements';
@@ -10,6 +11,7 @@ import { useClaudeRun } from './hooks/useClaudeRun';
 import type { RunEnd } from './hooks/useClaudeRun';
 import { useMessageQueue } from './hooks/useMessageQueue';
 import { useAgents } from './hooks/useAgents';
+import { usePipeline } from './hooks/usePipeline';
 import { usePermissions } from './hooks/usePermissions';
 import { useGeneralChat } from './hooks/useGeneralChat';
 import { usePanel } from './hooks/usePanel';
@@ -124,6 +126,22 @@ function AppShell() {
   replayRef.current = run.replay;
   const ask = useGeneralChat();
   const panel = usePanel();
+  const pipeline = usePipeline({
+    wsId: ws?.id ?? null, run, agents: agents.agents, chainSteps: agents.chainSteps,
+    permissions: permissions.requests, queued: (ws ? queue.items(ws.id) : []).map((m) => m.text),
+  });
+  // The pane is wanted while there is work to show and the panel is open; main picks the side (or inline).
+  const pipelineWanted = pipeline.visible && panel.open;
+  const { setPipelineWanted } = panel;
+  useEffect(() => { setPipelineWanted(pipelineWanted); }, [pipelineWanted, setPipelineWanted]);
+  const pipelineShown = panel.open && panel.pipelineOpen && panel.pipelineMode !== null && pipeline.visible;
+  const selectFromPipeline = (nodeId: string) => {
+    if (nodeId === 'quest') agents.select(null);
+    else if (nodeId.startsWith('agent:')) agents.select(nodeId.slice(6));
+  };
+  const pipelinePane = pipelineShown && panel.pipelineMode ? (
+    <PipelinePane model={pipeline.model} mode={panel.pipelineMode} onClose={pipeline.close} onSelect={selectFromPipeline} />
+  ) : null;
   const notifications = useNotifications({
     panel, wsId: ws?.id ?? null, agentId: agents.selectedId, agentIds: agents.agents.map((a) => a.id), say, selectAgent: agents.select,
   });
@@ -344,6 +362,7 @@ function AppShell() {
           ws, run, agents, busy, projectBusy, workspaceActions,
           archive: { count: ws?.archive?.length ?? 0, open: panel.drawerOpen, toggle: () => { void panel.toggleDrawer(); } },
           permissions,
+          onOpenPipeline: pipeline.canReopen && panel.open ? pipeline.reopen : undefined,
           queue: ws ? {
             items: queue.items(ws.id),
             paused: queue.isPaused(ws.id),
@@ -356,7 +375,9 @@ function AppShell() {
         ask={{ chat: ask, model: askModel, onModelChange: setAskModel }}
         inventory={{ ws, busy, actions: workspaceActions, onPickMap: pickMap, hide }}
         notify={{ cue: notifications.cue, onShow: notifications.show, onDismiss: notifications.dismiss }}
+        pipeline={panel.pipelineMode === 'inline' ? pipelinePane : null}
       />
+      {panel.pipelineMode !== 'inline' && pipelinePane}
       <ArchiveDrawer
         open={panel.open && panel.drawerOpen}
         wsId={ws?.id ?? null}

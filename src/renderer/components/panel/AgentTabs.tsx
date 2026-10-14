@@ -18,6 +18,8 @@ interface AgentTabsProps {
   archiveCount: number;
   archiveOpen: boolean;
   onToggleArchive: () => void;
+  /** Offered while work runs and the user closed the workflow pane: brings it back. */
+  onOpenPipeline?: () => void;
   /** The panel tab is on screen; no clock runs while it is hidden. */
   visible: boolean;
   /** Agents with a permission request waiting, and whether the Quest chat has one. */
@@ -37,7 +39,7 @@ function useClock(enabled: boolean): void {
   }, [enabled]);
 }
 
-export function AgentTabs({ agents, selectedId, onSelect, onRemove, archiveCount, archiveOpen, onToggleArchive, visible, asking, questAsking }: AgentTabsProps) {
+export function AgentTabs({ agents, selectedId, onSelect, onRemove, archiveCount, archiveOpen, onToggleArchive, onOpenPipeline, visible, asking, questAsking }: AgentTabsProps) {
   const ticking = visible && agents.some((a) => !a.dying && a.id !== selectedId);
   useClock(ticking); // only to re-render once a second; the time itself is read below so it is never older than the agent's last activity
   const now = Date.now();
@@ -76,6 +78,11 @@ export function AgentTabs({ agents, selectedId, onSelect, onRemove, archiveCount
           </button>
         );
       })}
+      {onOpenPipeline && (
+        <button type="button" id="pipeline-open" className="archive-pill pipeline-pill" title="Show the workflow pipeline again" onClick={onOpenPipeline}>
+          Pipeline
+        </button>
+      )}
       <button
         type="button"
         id="archive-open"

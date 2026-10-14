@@ -71,7 +71,16 @@ export interface Agent {
   /** Last event, message to it, or the user opening its tab: the idle timer counts from here. */
   lastActivityAt: number;
   usage: Usage;
+  /** The latest tool call and how many there were: what the workflow pipeline shows (the log is never scanned for it). */
+  lastTool?: { name: string; summary?: string };
+  toolCount?: number;
 }
+
+/** What the pipeline shows of the steps queued behind a running agent: agent id -> project and step names. */
+export type ChainSteps = Record<string, { wsId: string; names: string[] }>;
+
+/** Records a tool call on an agent (for the pipeline) next to its log line. */
+const withTool = (a: Agent, name: string, summary?: string): Agent => ({ ...a, lastTool: { name, summary }, toolCount: (a.toolCount ?? 0) + 1 });
 
 const emptyUsage = (): Usage => ({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 });
 
@@ -89,6 +98,8 @@ function toRecord(a: Agent, status: ArchivedAgent['status'], reason: ArchivedAge
 
 export interface AgentsApi {
   agents: Agent[];
+  /** Steps waiting behind running agents (read-only mirror of the chains; changes only when a chain is set or dropped). */
+  chainSteps: ChainSteps;
   selectedId: string | null;
   select: (id: string | null) => void;
   /** Closes an agent's tab: a running agent is stopped first, then its chat goes to the archive. */
@@ -143,6 +154,13 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const created = useRef(0);
   const chains = useRef(new Map<string, Chain>()); // running agent id -> what runs after it
+  const [chainSteps, setChainSteps] = useState<ChainSteps>({});
+  /** Mirrors `chains` into state for the pipeline; the Map stays the source of truth. */
+  const mirrorChains = useCallback(() => {
+    const next: ChainSteps = {};
+    chains.current.forEach((c, id) => { next[id] = { wsId: c.ws.id, names: c.rest.map((r) => r.definition.name) }; });
+    setChainSteps(next);
+  }, []);
   const failed = useRef(new Set<string>()); // agents that errored or were cancelled
   const stopped = useRef(new Set<string>()); // agents the user stopped (their end is "cancelled", not an error)
   const handingOff = useRef(new Set<string>()); // finished agents whose log a chain hand-off is still reading
@@ -205,6 +223,7 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
     const chain = chains.current.get(id);
     if (!chain) return;
     chains.current.delete(id);
+    mirrorChains();
     const names = chain.rest.map((s) => s.definition.name).join(', ');
     notifyRef.current(chain.ws.id, `Chain stopped: ${name} ${why}. Dropped: ${names}.`);
   }, []);
@@ -215,6 +234,7 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
     const chain = chains.current.get(agent.id);
     if (!chain) return;
     chains.current.delete(agent.id);
+    mirrorChains();
     const dropped = (why: string) => notifyRef.current(
       chain.ws.id, `Chain stopped: ${why}. Dropped: ${chain.rest.map((s) => s.definition.name).join(', ')}.`,
     );
@@ -296,7 +316,7 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
         updateStreamed(agentId, (a) => touch(withText(a, ev.text ?? '')));
         break;
       case 'tool':
-        update(agentId, (a) => touch({ ...a, log: appendLog(a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }) }));
+        update(agentId, (a) => touch(withTool({ ...a, log: appendLog(a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }) }, ev.name ?? 'tool', ev.summary)));
         game.toolEnemy(ev.name ?? '');
         break;
       case 'permission':
@@ -346,7 +366,7 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
       const result = await bar.runAgent(ws.id, definition.name, displayName, task);
       if (!result.agent) throw new Error(result.error || 'the agent could not start');
       const record = result.agent;
-      if (chain?.rest.length) chains.current.set(record.id, { ws, rest: chain.rest, total: chain.total });
+      if (chain?.rest.length) { chains.current.set(record.id, { ws, rest: chain.rest, total: chain.total }); mirrorChains(); }
       const index = created.current;
       created.current += 1;
       const now = Date.now();
@@ -433,7 +453,7 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
     if (ev.phase === 'end') {
       finishObserved(agentId, !!ev.isError, ev.text);
     } else if (ev.phase === 'event' && ev.inner === 'tool') {
-      update(agentId, (a) => ({ ...a, lastActivityAt: Date.now(), log: appendLog(a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }) }));
+      update(agentId, (a) => withTool({ ...a, lastActivityAt: Date.now(), log: appendLog(a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }) }, ev.name ?? 'tool', ev.summary));
       game.toolEnemy(ev.name ?? '');
     } else if (ev.phase === 'event' && ev.inner === 'text' && ev.text) {
       updateStreamed(agentId, (a) => ({ ...withText(a, ev.text ?? ''), lastActivityAt: Date.now() }));
@@ -575,5 +595,5 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
   }, [idleKey, limit, retire]);
 
   const running = spawning > 0 || agents.some((a) => a.status !== 'done');
-  return { agents, selectedId, select, remove, spawn, message, stop, stopAll, running, observe, endObserved, logMeta };
+  return { agents, chainSteps, selectedId, select, remove, spawn, message, stop, stopAll, running, observe, endObserved, logMeta };
 }

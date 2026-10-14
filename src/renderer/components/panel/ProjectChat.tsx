@@ -45,6 +45,8 @@ export interface ProjectChatProps {
   workspaceActions: WorkspaceActions;
   /** The archive drawer beside the panel. */
   archive: { count: number; open: boolean; toggle: () => void };
+  /** Set while the user closed the workflow pane during a run: the tab row's "Pipeline" pill. */
+  onOpenPipeline?: () => void;
   /** Pending permission requests ("Ask me each time") and the way to answer them. */
   permissions: Pick<PermissionsApi, 'requests' | 'answer'>;
 }
@@ -65,7 +67,7 @@ function ChatLog({ run, wsId, agentShown, messages, visible }: {
 }
 
 export function ProjectChat({
-  visible, ws, run, agents, busy, projectBusy, queue, model, onModelChange, onSend, onStop, workspaceActions, archive, permissions,
+  visible, ws, run, agents, busy, projectBusy, queue, model, onModelChange, onSend, onStop, workspaceActions, archive, onOpenPipeline, permissions,
 }: ProjectChatProps & { visible: boolean }) {
   const { settings, updateSettings } = useSettings();
   const { suggestions, refresh: refreshCommands } = useCommandCatalog(ws?.id ?? null);
@@ -96,6 +98,7 @@ export function ProjectChat({
         archiveCount={archive.count}
         archiveOpen={archive.open}
         onToggleArchive={archive.toggle}
+        onOpenPipeline={onOpenPipeline}
         visible={visible}
         asking={asking}
         questAsking={questAsking}

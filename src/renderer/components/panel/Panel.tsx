@@ -9,7 +9,7 @@ import type { AskChatProps } from './AskChat';
 import type { ProjectChatProps } from './ProjectChat';
 import type { PanelState } from '../../hooks/usePanel';
 import type { DragProps } from '../../hooks/useWindowDrag';
-import type { MouseEvent as ReactMouseEvent } from 'react';
+import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 
 interface PanelProps {
   panel: PanelState;
@@ -19,16 +19,19 @@ interface PanelProps {
   ask: AskChatProps;
   inventory: InventoryProps;
   notify: NotifyCueProps;
+  /** The workflow pane when it sits inline (no room beside the panel); null otherwise. */
+  pipeline?: ReactNode;
 }
 import { TABS } from '../../hooks/usePanel';
 import type { TabName } from '../../hooks/usePanel';
 
 /** The chat / inventory panel that opens from the strip. */
-export function Panel({ panel, dragProps, resizeProps, project, ask, inventory, notify }: PanelProps) {
+export function Panel({ panel, dragProps, resizeProps, project, ask, inventory, notify, pipeline }: PanelProps) {
   const visible = (name: TabName) => panel.open && panel.tab === name;
   return (
     <section id="panel" className={`interactive${panel.open ? '' : ' hidden'}`}>
       <PanelTabs tab={panel.tab} onTab={panel.setTab} onClose={() => panel.toggle(false)} dragProps={dragProps} />
+      {panel.tab === TABS.PROJECT && pipeline}
       <ProjectChat visible={visible(TABS.PROJECT)} {...project} />
       <AskChat visible={visible(TABS.ASK)} {...ask} />
       <Inventory visible={visible(TABS.INVENTORY)} {...inventory} />

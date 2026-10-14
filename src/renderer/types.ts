@@ -14,6 +14,8 @@ export type Theme = 'dark' | 'light';
 export type ModelAlias = 'opus' | 'sonnet' | 'haiku';
 /** Where the archive drawer sits: left or right of the chat panel (the window widens), or over it when there is no room. */
 export type DrawerMode = 'left' | 'right' | 'overlay';
+/** Where the workflow pipeline pane sits: beside the chat panel (the window widens), or inline at the top of the panel. */
+export type PipelineMode = 'left' | 'right' | 'inline';
 /** A chat entry. Tool calls carry a name/summary, everything else text. */
 export type ChatMessage =
   | { kind: 'tool'; name: string; summary?: string }
@@ -277,6 +279,10 @@ export interface Bar {
   drawerMode(): Promise<DrawerMode>;
   /** Ask main to open or close the drawer (it chooses the mode and the window size). 'none' = closed or refused. */
   setDrawerOpen(open: boolean): Promise<DrawerMode | 'none'>;
+  /** Where the workflow pipeline pane would open for the strip's current spot. */
+  pipelineMode(): Promise<PipelineMode>;
+  /** Ask main to open or close the pipeline pane (it chooses the mode and the window size). 'none' = closed or refused (hidden, panel closed). */
+  setPipelineOpen(open: boolean): Promise<PipelineMode | 'none'>;
   /** Ask main to hide the app (it closes the panel first). `ok: false` when it cannot (no tray icon = no way back). */
   hideWindow(): Promise<{ ok: boolean; reason?: string }>;
   /** Whether hiding is possible at all (the tray icon exists, or the bubble can be the way back), and where it goes. */
@@ -324,6 +330,7 @@ export interface Bar {
   onTogglePanel(cb: () => void): Unsubscribe;
   onPanelSide(cb: (side: 'above' | 'below') => void): Unsubscribe;
   onDrawerMode(cb: (mode: DrawerMode) => void): Unsubscribe;
+  onPipelineMode(cb: (mode: PipelineMode) => void): Unsubscribe;
   addMessage(wsId: string, message: ChatMessage): void;
 
   /** Tells main what is on screen (tab and chat) so it does not notify about a chat you are reading. */

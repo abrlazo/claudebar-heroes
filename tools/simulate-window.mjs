@@ -259,9 +259,9 @@ try {
   await click('#hide-app');
   check('1 hide: logged as button, hidden, panel and drawer closed in main', await waitV(1));
   const h1 = lastV();
-  check('1 log: hide / button / changed, visible false, panelOpen false, drawerOpen false', h1.action === 'hide' && h1.reason === 'button' && h1.changed === true && h1.visible === false && h1.panelOpen === false && h1.drawerOpen === false && h1.ignore === true, JSON.stringify(h1));
+  check('1 log: hide / button / changed, visible false, panelOpen false, drawerOpen false', h1.action === 'hide' && h1.reason === 'button' && h1.changed === true && h1.visible === false && h1.panelOpen === false && h1.drawerOpen === false && h1.pipelineOpen === false && h1.ignore === true, JSON.stringify(h1));
   await sleep(500);
-  check('1 the page follows: body.app-hidden, panel closed, drawer classes gone', (await hiddenNow()) && !(await panelOpen()) && !(await drawerNow()));
+  check('1 the page follows: body.app-hidden, panel closed, drawer classes gone', (await hiddenNow()) && !(await panelOpen()) && !(await drawerNow()) && !(await ev('document.body.classList.contains("pipe-open")')));
   check('1 bubble: it appears (strip hidden, bubble shown, never both) and the effects are ordered', await waitBubbleShown(1) && bubbleLast('show').stripVisible === false && bubbleLast('show').bubbleVisible === true && h1.effects.join() === 'stop-drag,close-panel,hide-window,show-bubble,notify-renderer', JSON.stringify(h1.effects));
   check('10 the battle loop is paused while hidden', (await ev('document.getElementById("stage").dataset.loop')) === 'paused');
 
