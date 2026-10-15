@@ -1263,6 +1263,7 @@ try {
   await pressEsc();
   check('Esc: next it closes the drawer (the panel stays, the window shrinks back)', await until(async () => !(await drawerOpenNow()) && (await geo()).ow === 560, 3000) && !(await ev('document.getElementById("panel").classList.contains("hidden")')));
   await pressEsc();
+  check('Esc: the panel first plays its exit (closing class), then goes', await until(() => ev('document.getElementById("panel").classList.contains("closing") || document.getElementById("panel").classList.contains("hidden")'), 1000));
   check('Esc: then it closes the panel', await until(() => ev('document.getElementById("panel").classList.contains("hidden")'), 3000) && (await geo()).oh === 96);
   await click('#toggle-panel');
   await sleep(700);
