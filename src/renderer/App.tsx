@@ -159,7 +159,7 @@ function AppShell() {
   const windowVisibility = useWindowVisibility(game, settings.minimizeTo);
   const hide = { canHide: windowVisibility.canHide, onHide: windowVisibility.hide, to: windowVisibility.to, tray: windowVisibility.tray };
   const dragProps = useWindowDrag();
-  const resizeProps = usePanelResize();
+  const resizeProps = usePanelResize(panel.maxPanelH);
 
   // Theme.
   useEffect(() => {

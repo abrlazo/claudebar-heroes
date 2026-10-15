@@ -7,11 +7,13 @@ const MIN_HEIGHT = 300;
 const MAX_HEIGHT = 1000;
 
 /**
- * Drag the panel's bottom handle to resize it. Uses screenY: the window
- * itself moves while resizing (it grows upward when the panel is above the
- * strip), so clientY would feed back on itself.
+ * Drag the panel's handle to resize it. The panel follows live (it is sized by --panel-h inside the fixed window) and
+ * stops at the room the window holds (`maxHeight`); the height is saved on mouseup. screenY keeps the delta stable
+ * even while the panel's edge moves under the cursor. Fit-to-open window: the window itself resizes on mouseup.
  */
-export function usePanelResize(): { onMouseDown: (e: ReactMouseEvent) => void } {
+export function usePanelResize(maxHeight: number = MAX_HEIGHT): { onMouseDown: (e: ReactMouseEvent) => void } {
+  const maxRef = useRef(maxHeight);
+  maxRef.current = maxHeight;
   const { settings, updateSettingsLocal } = useSettings();
   const heightRef = useRef(settings.panelHeight || 500);
   heightRef.current = settings.panelHeight || 500;
@@ -21,7 +23,7 @@ export function usePanelResize(): { onMouseDown: (e: ReactMouseEvent) => void } 
     if (!drag.current) return;
     const above = !document.body.classList.contains('panel-below');
     const delta = (e.screenY - drag.current.startY) * (above ? -1 : 1);
-    const next = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, drag.current.startHeight + delta));
+    const next = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, maxRef.current), drag.current.startHeight + delta));
     // Update local state for immediate visual feedback, but don't persist until mouseup
     updateSettingsLocal({ panelHeight: next });
   }, [updateSettingsLocal]);
@@ -30,6 +32,7 @@ export function usePanelResize(): { onMouseDown: (e: ReactMouseEvent) => void } 
     if (!drag.current) return;
     drag.current = null;
     document.body.classList.remove('resizing');
+    bar.setInteracting(false);
     // Persist the final height on mouseup, not during drag
     bar.updateSettings({ panelHeight: heightRef.current });
   }, []);
@@ -50,6 +53,7 @@ export function usePanelResize(): { onMouseDown: (e: ReactMouseEvent) => void } 
     e.preventDefault();
     drag.current = { startY: e.screenY, startHeight: heightRef.current };
     document.body.classList.add('resizing');
+    bar.setInteracting(true); // main's click-through watchdog waits while the mouse is held
   }, []);
 
   return { onMouseDown };

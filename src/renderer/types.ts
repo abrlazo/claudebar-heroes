@@ -14,6 +14,17 @@ export type Theme = 'dark' | 'light';
 export type ModelAlias = 'opus' | 'sonnet' | 'haiku';
 /** Where the archive drawer sits: left or right of the chat panel (the window widens), or over it when there is no room. */
 export type DrawerMode = 'left' | 'right' | 'overlay';
+/** What main's window holds (main -> renderer only): the panel's side, the room for it and the drawer mode.
+ *  `fixed`: the OS window never resizes for the panel or drawer (open / close is CSS); false = the old fit-to-open window. */
+export interface PanelLayout {
+  side: 'above' | 'below';
+  /** Panel height + gap main would show for the saved setting. */
+  panelH: number;
+  /** The most the window can hold (fixed layout), 1000 otherwise. */
+  maxPanelH: number;
+  drawerMode: DrawerMode;
+  fixed: boolean;
+}
 /** A chat entry. Tool calls carry a name/summary, everything else text. */
 export type ChatMessage =
   | { kind: 'tool'; name: string; summary?: string }
@@ -269,10 +280,14 @@ export interface Bar {
   achievementsBackfilled(): Promise<Settings>;
 
   setClickThrough(ignore: boolean): void;
+  /** A panel resize is in progress (main's click-through watchdog waits; it expires by itself). */
+  setInteracting(on: boolean): void;
   focus(): void;
   dragStart(): void;
   dragEnd(): void;
   panelSide(): Promise<'above' | 'below'>;
+  /** The current layout (asked once at startup; changes arrive through onPanelLayout). */
+  panelLayout(): Promise<PanelLayout>;
   setPanelOpen(open: boolean): Promise<'above' | 'below'>;
   /** Where the archive drawer would open for the strip's current spot. */
   drawerMode(): Promise<DrawerMode>;
@@ -328,7 +343,9 @@ export interface Bar {
   onAgentEvent(cb: (event: AgentEvent) => void): Unsubscribe;
   onGeneralChatEvent(cb: (event: ClaudeEvent) => void): Unsubscribe;
   onTogglePanel(cb: () => void): Unsubscribe;
-  onPanelSide(cb: (side: 'above' | 'below') => void): Unsubscribe;
+  onPanelLayout(cb: (layout: PanelLayout) => void): Unsubscribe;
+  /** Main made the window click-through on its own (watchdog): start over from "ignoring". */
+  onClickThroughReset(cb: () => void): Unsubscribe;
   onDrawerMode(cb: (mode: DrawerMode) => void): Unsubscribe;
   addMessage(wsId: string, message: ChatMessage): void;
 

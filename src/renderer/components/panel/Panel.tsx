@@ -27,7 +27,7 @@ import type { TabName } from '../../hooks/usePanel';
 export function Panel({ panel, dragProps, resizeProps, project, ask, inventory, notify }: PanelProps) {
   const visible = (name: TabName) => panel.open && panel.tab === name;
   return (
-    <section id="panel" className={`interactive${panel.open ? '' : ' hidden'}`}>
+    <section id="panel" className={`interactive${panel.open ? '' : ' hidden'}${panel.closing ? ' closing' : ''}`}>
       <PanelTabs tab={panel.tab} onTab={panel.setTab} onClose={() => panel.toggle(false)} dragProps={dragProps} />
       <ProjectChat visible={visible(TABS.PROJECT)} {...project} />
       <AskChat visible={visible(TABS.ASK)} {...ask} />
