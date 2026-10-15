@@ -318,6 +318,10 @@ try {
   await showViaTray();
   await sleep(600);
   const p = await center('#toggle-panel');
+  // The CDP mouse events carry no real cursor: main's click-through watchdog (150 ms) reads the OS cursor, so it is
+  // told, through the command seam, that the cursor sits over the strip (the strip is at 100,400 and 560 x 96).
+  command('cursor {"x":380,"y":448}');
+  await sleep(500);
   await mouse('mouseMoved', { x: 5, y: 5 }); // outside the strip first
   await mouse('mouseMoved', p);
   await sleep(300);
@@ -336,6 +340,24 @@ try {
   await sleep(900);
   check('11 and a click on the chat button opens the panel', await panelOpen());
   await setPanel(false);
+
+  // Watchdog: the window takes the mouse but the (fake) cursor is far outside the strip and the closed panel, so main
+  // makes the window click-through by itself, and the page starts over so the next move over the strip works again.
+  await mouse('mouseMoved', p);
+  await sleep(400);
+  const nw = cts().length;
+  command('cursor {"x":380,"y":150}'); // inside the big transparent window, over nothing
+  await sleep(900);
+  check('11 watchdog: a cursor outside every interactive rectangle makes the window click-through again', cts().length > nw && cts().at(-1).ignore === true, JSON.stringify(cts().slice(nw)));
+  command('cursor {"x":380,"y":448}');
+  await sleep(500);
+  const nw2 = cts().length;
+  await mouse('mouseMoved', { x: p.x + 2, y: p.y });
+  await sleep(300);
+  check('11 watchdog: the first move back over the strip accepts the mouse again (page reset)', cts().length > nw2 && cts().at(-1).ignore === false, JSON.stringify(cts().slice(nw2)));
+  await sleep(700);
+  check('11 watchdog: a cursor over the strip does not flap', cts().slice(nw2).length === 1, JSON.stringify(cts().slice(nw2)));
+  command('cursor off');
 
   // ----- race: the chat button and hide in the same tick -----
   const nr = vlines().length;

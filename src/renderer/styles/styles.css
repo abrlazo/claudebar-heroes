@@ -364,10 +364,11 @@ body.theme-light .agent-tab .idle.quiet { color: #a06800; }
 
 /* ---------- Archive of retired / closed agent chats (a drawer beside the panel) ---------- */
 
-/* The window is --main-w wide, or 608px wider while the drawer is open (main.js). The strip and panel
-   hold to the edge that does not move, so they stay put when the window grows. */
-body.drawer-left #strip, body.drawer-left #panel { left: auto; right: 0; width: var(--main-w); }
-body.drawer-right #strip, body.drawer-right #panel { left: 0; right: auto; width: var(--main-w); }
+/* The window is --main-w wide, or 608px wider (permanently in the fixed layout: body.win-left / win-right; only while
+   the drawer is open in the fit-to-open fallback: body.drawer-left / drawer-right). The strip and panel hold to the
+   edge that does not move, so they stay put. */
+body.drawer-left #strip, body.drawer-left #panel, body.win-left #strip, body.win-left #panel { left: auto; right: 0; width: var(--main-w); }
+body.drawer-right #strip, body.drawer-right #panel, body.win-right #strip, body.win-right #panel { left: 0; right: auto; width: var(--main-w); }
 
 #archive-drawer {
   position: absolute;
@@ -473,7 +474,23 @@ body.theme-light .archive-badge.cancelled { color: #a06800; }
   border-radius: var(--radius);
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
   overflow: hidden;
+  animation: panel-in 0.14s ease-out; /* 140 ms = PANEL_ANIM_MS in hooks/usePanel.ts */
 }
+#panel.closing { animation: panel-out 0.14s ease-out forwards; pointer-events: none; }
+body.panel-closing #archive-drawer { animation: panel-out 0.14s ease-out forwards; pointer-events: none; }
+@keyframes panel-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes panel-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(8px); } }
+body.panel-below #panel { animation-name: panel-in-below; }
+body.panel-below #panel.closing { animation-name: panel-out-below; }
+@keyframes panel-in-below { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+@keyframes panel-out-below { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-8px); } }
+@media (prefers-reduced-motion: reduce) { #panel, #panel.closing, body.panel-closing #archive-drawer { animation: none !important; } }
+
+/* Fixed-size window (main/window-layout.js): the panel and the drawer are sized by --panel-h (set from the saved height,
+   at most what the window holds), so resizing is live. --panel-h is panel + 8px gap. The fit-to-open fallback has no
+   body.win-fixed and keeps sizing them from the window (top: 0, bottom: strip + gap). */
+body.win-fixed #panel, body.win-fixed #archive-drawer { top: auto; height: calc(var(--panel-h, 500px) - 8px); }
+body.win-fixed.panel-below #panel, body.win-fixed.panel-below #archive-drawer { top: calc(var(--strip-h) + 8px); bottom: auto; }
 
 .panel-tabs {
   display: flex;

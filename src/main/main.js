@@ -9,7 +9,8 @@ const agents = require('./agents');
 const agentDefinitions = require('./agent-definitions');
 const commandCatalog = require('./command-catalog');
 const heroDesign = require('./hero-design');
-const { DRAWER_EXTRA, chooseDrawerMode, windowRect } = require('./drawer-layout');
+const { chooseDrawerMode } = require('./drawer-layout');
+const windowLayout = require('./window-layout');
 const notify = require('./notify');
 const visibility = require('./window-visibility');
 const bubbleState = require('./bubble-state');
@@ -21,14 +22,22 @@ if (process.platform === 'win32') app.setAppUserModelId('com.claudebar.heroes');
 
 // The window is a transparent, frameless box that holds the hero strip. It
 // can be dragged anywhere (even over the taskbar) and remembers its spot.
-// Opening the chat panel grows the window upward, or downward when there
-// isn't room above. While the archive drawer is open the window also grows sideways
-// (left of the strip, else right, else not at all); `stripPos` never changes for it.
-// Transparent areas are click-through.
+// The OS window has a FIXED size (window-layout.js): the strip plus room for the chat panel on its side (above, or
+// below when there is no room above) and, when the display allows, 608 px for the archive drawer (left of the strip,
+// else right, else it lies over the panel). Opening or closing the panel or the drawer never resizes it, that is CSS;
+// the window is re-laid-out only at drag end, Reset Position, show, a display change, a panel height change and startup.
+// On Linux, or with CBH_WINDOW_FIT=1, the old behaviour stays: the window grows with the open panel and drawer.
+// `stripPos` is always the strip's top-left. Transparent areas are click-through.
 const WIN_WIDTH = 560;
 const STRIP_H = 96;
 const DEFAULT_PANEL_HEIGHT = 500; // panel height + gap
 const MARGIN = 8;
+// Fixed-size window (see above). Linux is unverified for click-through with forwarded mouse moves, so it keeps fitting;
+// CBH_WINDOW_FIT=1 (main's environment only) is the same fallback on any platform.
+const LAYOUT_FIXED = process.platform !== 'linux' && process.env.CBH_WINDOW_FIT !== '1';
+const WATCHDOG_MS = 150;
+const WATCHDOG_SLACK = 4;
+const INTERACTING_MAX_MS = 10000;
 
 // DevTools open on launch only for `npm run dev` (--dev); otherwise use the tray menu.
 const isDev = process.argv.includes('--dev');
@@ -43,7 +52,7 @@ let stripPos = null;       // top-left of the strip, in screen coordinates
 let panelOpen = false;
 let panelSide = 'above';
 let drawerOpen = false;     // archive drawer beside the panel (only while the panel is open)
-let drawerMode = 'left';    // 'left' | 'right' | 'overlay', chosen when it opens
+let drawerMode = 'left';    // 'left' | 'right' | 'overlay' (fixed layout: always derived from the strip's spot; fit mode: chosen when it opens)
 let dragTimer = null;
 let panelHeight = DEFAULT_PANEL_HEIGHT;
 let runningWsId = null;     // workspace of the Claude run in progress
@@ -52,6 +61,11 @@ let generalChatHandle = null; // handle to general chat Claude process
 let generalSessionId = null;  // general chat conversation (kept while the app runs)
 // Hide / show (see applyVisibility). Memory only: the app always starts visible. Hiding needs a way back: the tray, or the bubble.
 const vis = visibility.createVisibility({ trayOk: false, bubbleOk: process.env.CBH_WINDOW_NOBUBBLE !== '1', mode: 'bubble' });
+let lastRect = null;          // the window rectangle main last applied (a repeat is not applied again)
+let lastLayoutJson = '';      // the last `panel:layout` payload sent to the renderer
+let watchdogTimer = null;     // click-through watchdog, runs only while the window takes the mouse
+let interactingUntil = 0;     // a panel resize is in progress (the renderer says so): the watchdog waits
+let fakeCursor = null;        // test seam CBH_WINDOW_COMMANDS `cursor`
 let mouseIgnored = true;      // what main last set with setIgnoreMouseEvents (the window starts click-through)
 let commandTimer = null;      // test seam CBH_WINDOW_COMMANDS
 // The floating bubble (see "The floating bubble" below): a second small window, created at the first hide and then kept.
@@ -92,34 +106,59 @@ function clampToDisplay({ x, y }) {
   };
 }
 
-function chooseSide() {
-  const { workArea } = screen.getDisplayNearestPoint({ x: stripPos.x, y: stripPos.y });
-  return stripPos.y - panelHeight >= workArea.y ? 'above' : 'below';
+function stripArea() {
+  return screen.getDisplayNearestPoint({ x: stripPos.x, y: stripPos.y }).workArea;
 }
 
-function windowY() {
-  return panelOpen && panelSide === 'above' ? stripPos.y - panelHeight : stripPos.y;
+// Test seam (environment of the main process only, never reachable from the renderer): the simulation runs on
+// large displays where 'overlay' cannot happen, so it forces that mode.
+const forceOverlay = () => process.env.CBH_FORCE_DRAWER_MODE === 'overlay';
+
+function currentLayout() {
+  return windowLayout.computeLayout({
+    stripPos, stripW: WIN_WIDTH, stripH: STRIP_H, area: stripArea(), panelHeight, fixed: LAYOUT_FIXED, forceOverlay: forceOverlay(),
+    panelOpen, panelSide, drawerOpen, drawerMode,
+  });
+}
+
+// Fit mode: the side the panel would open on (the old rule). Fixed: the layout's side.
+function chooseSide() {
+  if (LAYOUT_FIXED) return currentLayout().side;
+  return stripPos.y - panelHeight >= stripArea().y ? 'above' : 'below';
 }
 
 // Where the drawer would go for the strip's current spot (measured on the display it is on).
 function currentDrawerMode() {
-  // Test seam (environment of the main process only, never reachable from the renderer): the simulation runs on
-  // large displays where 'overlay' cannot happen, so it forces that mode.
-  if (process.env.CBH_FORCE_DRAWER_MODE === 'overlay') return 'overlay';
-  const { workArea } = screen.getDisplayNearestPoint({ x: stripPos.x, y: stripPos.y });
-  return chooseDrawerMode(stripPos.x, WIN_WIDTH, workArea);
+  if (forceOverlay()) return 'overlay';
+  return chooseDrawerMode(stripPos.x, WIN_WIDTH, stripArea());
 }
 
-// The window grows to the left of the strip in 'left' mode, so its x is the strip's minus that.
-function leftExtra() {
-  return drawerOpen && panelOpen && drawerMode === 'left' ? DRAWER_EXTRA : 0;
+function layoutPayload(l) {
+  return { side: l.side, panelH: l.panelH, maxPanelH: l.maxPanelH, drawerMode: l.mode, fixed: l.fixed };
 }
 
+// Tells the renderer what the window holds (main -> renderer only, nothing comes back): the side of the panel, the
+// room for it and the drawer mode. Sent when it changes, or when `force` (a reloaded page).
+function pushLayout(l, force = false) {
+  const payload = layoutPayload(l);
+  const json = JSON.stringify(payload);
+  if (!force && json === lastLayoutJson) return;
+  lastLayoutJson = json;
+  win?.webContents.send('panel:layout', payload);
+}
+
+// Sets the window rectangle from the layout. A repeat of the same rectangle does nothing, so opening or closing the
+// panel or the drawer in the fixed layout never touches the OS window.
 function applyBounds() {
   if (!win) return;
-  win.setBounds(windowRect({
-    stripPos, stripW: WIN_WIDTH, stripH: STRIP_H, panelOpen, panelSide, panelHeight, drawerOpen, drawerMode,
-  }));
+  const l = currentLayout();
+  if (l.fixed) { panelSide = l.side; drawerMode = l.mode; }
+  if (!windowLayout.sameRect(lastRect, l.rect)) {
+    lastRect = l.rect;
+    win.setBounds(l.rect);
+    logWindow({ event: 'bounds', rect: l.rect });
+  }
+  pushLayout(l);
 }
 
 function restorePosition() {
@@ -130,7 +169,7 @@ function restorePosition() {
 
 function resetPosition() {
   stripPos = defaultStripPos();
-  if (drawerOpen) {
+  if (drawerOpen && !LAYOUT_FIXED) {
     drawerMode = currentDrawerMode();
     win?.webContents.send('panel:drawerMode', drawerMode);
   }
@@ -180,7 +219,10 @@ function createWindow() {
   });
 
   // A reloaded renderer starts out thinking it is visible.
-  win.webContents.on('did-finish-load', () => { if (vis.hidden()) win?.webContents.send('window:visible', { visible: false }); });
+  win.webContents.on('did-finish-load', () => {
+    if (vis.hidden()) win?.webContents.send('window:visible', { visible: false });
+    pushLayout(currentLayout(), true);
+  });
 
   win.on('closed', () => { win = null; });
 }
@@ -605,7 +647,7 @@ function applyVisibility(action, reason) {
     } else if (effect === 'close-panel') {
       panelOpen = false;
       drawerOpen = false;
-      applyBounds();
+      if (!LAYOUT_FIXED) applyBounds(); // fixed: the window does not change with the panel; `place` recomputes it before a show
     } else if (effect === 'hide-window') {
       setMouseIgnored(true);
       win.hide();
@@ -646,6 +688,32 @@ function setMouseIgnored(ignore) {
   mouseIgnored = ignore;
   win?.setIgnoreMouseEvents(ignore, { forward: true });
   if (process.env.CBH_WINDOW_LOG) logWindow({ event: 'click-through', ignore });
+  if (ignore) stopWatchdog(); else startWatchdog();
+}
+
+// The fixed window is large and transparent, so a renderer that hangs or reloads while the window takes the mouse would
+// block whatever lies under it. While the window is NOT click-through, main checks the cursor against the strip, panel
+// and drawer rectangles (from the layout) and makes the window click-through again when it is outside all of them. A live
+// renderer flips it back the moment the mouse moves over an `.interactive` element, so it cannot flap.
+function stopWatchdog() {
+  if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null; }
+}
+function startWatchdog() {
+  if (watchdogTimer) return;
+  watchdogTimer = setInterval(watchdogTick, WATCHDOG_MS);
+  watchdogTimer.unref?.();
+}
+function watchdogTick() {
+  if (!win || mouseIgnored || vis.hidden()) { stopWatchdog(); return; }
+  if (dragTimer || Date.now() < interactingUntil) return; // a drag or a panel resize has the mouse
+  const cursor = fakeCursor ?? screen.getCursorScreenPoint();
+  const l = currentLayout();
+  const rects = windowLayout.interactiveRects({
+    stripPos, stripW: WIN_WIDTH, stripH: STRIP_H, side: l.side, panelH: l.panelH, mode: l.mode, panelOpen, drawerOpen,
+  });
+  if (windowLayout.pointInRects(cursor, rects, WATCHDOG_SLACK)) return;
+  setMouseIgnored(true);
+  win.webContents.send('window:clickThroughReset'); // the page starts over from "ignoring" so its next move tells main again
 }
 
 // Test seam: CBH_WINDOW_LOG=<file> appends one JSON line per outcome (main's environment only, never settings or IPC).
@@ -661,7 +729,8 @@ function logWindow(entry) {
 
 // Test seam: CBH_WINDOW_COMMANDS=<file> is polled every 200 ms; each new line runs the same handler the OS event would
 // (an automated test cannot click the OS tray or a notification). Lines: `tray`, `shortcut`, `notify-click {"wsId":..,"agentId":..}`,
-// `bubble-click {"dx":..}`, `bubble-drag {"dx":..,"dy":..}` and `bubble-menu [item label]` (only while the bubble is up).
+// `bubble-click {"dx":..}`, `bubble-drag {"dx":..,"dy":..}` and `bubble-menu [item label]` (only while the bubble is up),
+// and `cursor {"x":..,"y":..}` / `cursor off` (a fake cursor for the click-through watchdog).
 function startCommandSeam() {
   const file = process.env.CBH_WINDOW_COMMANDS;
   if (!file) return;
@@ -686,6 +755,10 @@ function startCommandSeam() {
         if (bubbleUp()) { bubblePress({ x: 0, y: 0 }); bubbleRelease({ x: dx, y: dy }); }
       } else if (name === 'bubble-menu') {
         openBubbleMenu(rest.join(' ') || '');
+      } else if (name === 'cursor') {
+        let c = null;
+        try { c = JSON.parse(rest.join(' ') || 'null'); } catch { /* off */ }
+        fakeCursor = c && Number.isFinite(c.x) && Number.isFinite(c.y) ? { x: c.x, y: c.y } : null;
       }
     }
   }, 200);
@@ -802,6 +875,12 @@ function registerIpc() {
     setMouseIgnored(ignore);
   });
 
+  // A panel resize is in progress: the watchdog must not take the mouse away mid-drag (self-expiring, so it cannot stick).
+  ipcMain.on('window:interacting', (_e, on) => {
+    if (typeof on !== 'boolean') return;
+    interactingUntil = on ? Date.now() + INTERACTING_MAX_MS : 0;
+  });
+
   ipcMain.on('window:focus', () => { if (!vis.hidden()) win?.focus(); });
 
   // The renderer only asks; main decides (and refuses without a tray). There is no "show" request: a hidden window
@@ -821,15 +900,19 @@ function registerIpc() {
     if (!win || vis.hidden()) return;
     const cursor = screen.getCursorScreenPoint();
     const offset = { x: cursor.x - stripPos.x, y: cursor.y - stripPos.y };
+    // Fixed layout: where the strip sits inside the window does not change during the drag. Fit mode asks each tick
+    // (the panel and drawer change it).
+    const fixedOffset = LAYOUT_FIXED ? currentLayout().stripOffset : null;
     clearInterval(dragTimer);
     let lastX = null;
     let lastY = null;
     dragTimer = setInterval(() => {
       const p = screen.getCursorScreenPoint();
       stripPos = { x: p.x - offset.x, y: p.y - offset.y };
-      // Compare the final window position (the drawer can change it mid-drag), not the cursor.
-      const x = stripPos.x - leftExtra();
-      const y = windowY();
+      // Compare the final window position, not the cursor.
+      const so = fixedOffset ?? currentLayout().stripOffset;
+      const x = stripPos.x - so.x;
+      const y = stripPos.y - so.y;
       if (x === lastX && y === lastY) return;
       lastX = x;
       lastY = y;
@@ -842,29 +925,30 @@ function registerIpc() {
     clearInterval(dragTimer);
     dragTimer = null;
     stripPos = clampToDisplay(stripPos);
-    if (panelOpen) {
-      panelSide = chooseSide();
-      win?.webContents.send('panel:side', panelSide);
-    }
-    if (drawerOpen) {
-      // The strip may now sit where the drawer no longer fits on its old side.
-      const next = currentDrawerMode();
-      if (next !== drawerMode) {
-        drawerMode = next;
-        win?.webContents.send('panel:drawerMode', drawerMode);
+    if (!LAYOUT_FIXED) {
+      if (panelOpen) panelSide = chooseSide();
+      if (drawerOpen) {
+        // The strip may now sit where the drawer no longer fits on its old side.
+        const next = currentDrawerMode();
+        if (next !== drawerMode) {
+          drawerMode = next;
+          win?.webContents.send('panel:drawerMode', drawerMode);
+        }
       }
     }
+    lastRect = null; // the window was moved by the drag: apply the layout for the new spot for sure
     applyBounds();
     settings.set({ windowPos: stripPos });
   });
 
   ipcMain.handle('panel:side', () => chooseSide());
+  ipcMain.handle('panel:layout', () => layoutPayload(currentLayout())); // the renderer asks once at startup
 
   ipcMain.handle('panel:setOpen', (_e, open) => {
-    panelOpen = open === true && !vis.hidden(); // a late call cannot grow a hidden window
+    panelOpen = open === true && !vis.hidden(); // a late call cannot open the panel of a hidden window
     if (!panelOpen) drawerOpen = false; // the drawer is a companion of the panel
-    if (panelOpen) panelSide = chooseSide();
-    applyBounds();
+    if (panelOpen && !LAYOUT_FIXED) panelSide = chooseSide();
+    applyBounds(); // fixed layout: the same rectangle, so nothing happens to the OS window
     return panelSide;
   });
 
@@ -876,7 +960,7 @@ function registerIpc() {
     if (open && (!panelOpen || vis.hidden())) return 'none';
     drawerOpen = open;
     if (open) drawerMode = currentDrawerMode();
-    applyBounds();
+    applyBounds(); // fixed layout: the same rectangle
     return drawerOpen ? drawerMode : 'none';
   });
 
@@ -1261,6 +1345,7 @@ app.on('will-quit', () => {
   clearInterval(stagingTimer);
   staging.clear();
   clearInterval(dragTimer);
+  stopWatchdog();
   stopBubblePoll();
   if (bubbleLive()) bubbleWin.destroy();
   notifier?.dispose();
