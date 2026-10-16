@@ -214,7 +214,7 @@ const loseConnection = (why) => {
 const stopping = new WeakSet(); // children and sockets we ended on purpose
 const launch = (dir, env = {}) => {
   const child = spawn(electronBin, [root, `--user-data-dir=${dir}`, `--remote-debugging-port=${port}`], {
-    env: { ...process.env, CLAUDE_BIN: fake, FAKE_NODE: process.execPath, FAKE_COUNT: path.join(work, 'design-count.txt'), FAKE_RUNS: path.join(work, 'runs.txt'), ...env }, stdio: 'ignore',
+    env: { ...process.env, CBH_NOTIFY_OFF: '1', CLAUDE_BIN: fake, FAKE_NODE: process.execPath, FAKE_COUNT: path.join(work, 'design-count.txt'), FAKE_RUNS: path.join(work, 'runs.txt'), ...env }, stdio: 'ignore',
   });
   child.on('exit', (code, signal) => { if (!stopping.has(child)) loseConnection(`the app exited by itself (code ${code}, signal ${signal})`); });
   child.on('error', (e) => loseConnection(`the app could not start: ${e.message}`));
@@ -1297,6 +1297,7 @@ try {
   await pressEsc();
   check('Esc: next it closes the drawer (the panel stays, the window shrinks back)', await until(async () => !(await drawerOpenNow()) && (await geo()).ow === 560, 3000) && !(await ev('document.getElementById("panel").classList.contains("hidden")')));
   await pressEsc();
+  check('Esc: the panel first plays its exit (closing class), then goes', await until(() => ev('document.getElementById("panel").classList.contains("closing") || document.getElementById("panel").classList.contains("hidden")'), 1000));
   check('Esc: then it closes the panel', await until(() => ev('document.getElementById("panel").classList.contains("hidden")'), 3000) && (await geo()).oh === 96);
   await click('#toggle-panel');
   await sleep(700);

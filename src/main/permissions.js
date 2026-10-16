@@ -216,9 +216,19 @@ function buildErrorResponse(requestId, error) {
   return `${JSON.stringify({ type: 'control_response', response: { subtype: 'error', request_id: requestId, error } })}\n`;
 }
 
-/** The stdin line carrying the user's prompt in stream-json input mode. */
-function buildUserLine(prompt) {
-  return `${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: String(prompt) }] } })}\n`;
+/**
+ * The stdin line carrying the user's prompt in stream-json input mode. `images` is `[{ mime, buffer }]` built by
+ * main from its own staging (the mime comes from `sniff`, never from the renderer): image blocks first, then the
+ * text block (left out when the text is empty). Without images the line is exactly what it always was.
+ */
+function buildUserLine(prompt, images = []) {
+  const text = String(prompt);
+  if (!Array.isArray(images) || images.length === 0) {
+    return `${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } })}\n`;
+  }
+  const content = images.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.mime, data: i.buffer.toString('base64') } }));
+  if (text) content.push({ type: 'text', text });
+  return `${JSON.stringify({ type: 'user', message: { role: 'user', content } })}\n`;
 }
 
 /** The stdin line that switches the run's permission mode, or null for a mode that is not one of the four footer modes. */

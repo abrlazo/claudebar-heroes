@@ -38,6 +38,12 @@ const SHAPE_STAND = shape(STAND);
 const SHAPE_LIE = shape(LIE);
 const SHAPE_KEYS = Object.keys(SHAPE_STAND);
 const lerp = (a, b, t) => a + (b - a) * t;
+// Flame layers, back to front (drawn every frame, so defined once).
+const SPIKE_LAYERS = [
+  { width: 5, height: 1, white: 0, alpha: 0.5 },
+  { width: 4, height: 0.68, white: 0.45, alpha: 0.72 },
+  { width: 2, height: 0.4, white: 0.85, alpha: 0.9 },
+];
 
 const hexToRgb = (hex) => {
   const n = parseInt(hex.slice(1), 16);
@@ -73,13 +79,8 @@ export function createAura(canvas) {
 
   function drawSpikes(surge) {
     const scale = (0.4 + 0.6 * power) * surge;
-    const layers = [
-      { width: 5, height: 1, white: 0, alpha: 0.5 },
-      { width: 4, height: 0.68, white: 0.45, alpha: 0.72 },
-      { width: 2, height: 0.4, white: 0.85, alpha: 0.9 },
-    ];
     const last = STAND.spikes - 1;
-    for (const layer of layers) {
+    for (const layer of SPIKE_LAYERS) {
       ctx.fillStyle = rgba(mixWhite(rgb, layer.white), layer.alpha * (0.5 + 0.5 * power));
       for (let i = 0; i < MAX_SPIKES; i++) {
         // Standing: 5 spikes. Lying: 7 along the longer body; the two extra ones grow out of the

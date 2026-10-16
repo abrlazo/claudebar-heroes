@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cbh-messages-'));
 fs.writeFileSync(path.join(tmp, 'messages.mjs'), stripTypeScriptTypes(fs.readFileSync(path.join(root, 'src/renderer/lib/messages.ts'), 'utf8')));
-const { MAX_MESSAGES, appendCapped } = await import(pathToFileURL(path.join(tmp, 'messages.mjs')).href);
+const { MAX_MESSAGES, appendCapped, appendLog } = await import(pathToFileURL(path.join(tmp, 'messages.mjs')).href);
 fs.rmSync(tmp, { recursive: true, force: true });
 
 let failed = 0;
@@ -35,5 +35,15 @@ try { appendCapped(Object.freeze([1, 2, 3]), 4); } catch { threw = true; }
 check('does not mutate the input (frozen array)', !threw);
 check('input unchanged', full.length === MAX_MESSAGES && full[0] === 0);
 check('custom max', appendCapped([1, 2, 3], 4, 3).join() === '2,3,4');
+
+// Agent logs (appendLog): capped like the chat, but the first entry (the agent's task) always stays.
+check('appendLog appends under the cap', appendLog([1, 2], 3).join() === '1,2,3');
+const log = appendLog(full, MAX_MESSAGES);
+check('appendLog keeps the cap', log.length === MAX_MESSAGES, `${log.length}`);
+check('appendLog keeps the task (first entry)', log[0] === 0 && log[1] === 2 && log[log.length - 1] === MAX_MESSAGES);
+check('appendLog custom max', appendLog([1, 2, 3, 4], 5, 3).join() === '1,4,5');
+let logThrew = false;
+try { appendLog(Object.freeze([1, 2, 3]), 4, 3); } catch { logThrew = true; }
+check('appendLog does not mutate the input', !logThrew);
 
 process.exit(failed ? 1 : 0);

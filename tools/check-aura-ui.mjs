@@ -38,7 +38,7 @@ fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({
     lastContext: 0, contextWindow: 200000, kills: 0, map: 'forest', sessionId: null, messages: [], agents: [] }],
 }));
 
-const app = spawn(electronBin, [root, `--user-data-dir=${userData}`, `--remote-debugging-port=${port}`], { env: { ...process.env, CLAUDE_BIN: fake }, stdio: 'ignore' });
+const app = spawn(electronBin, [root, `--user-data-dir=${userData}`, `--remote-debugging-port=${port}`], { env: { ...process.env, CBH_NOTIFY_OFF: '1', CLAUDE_BIN: fake }, stdio: 'ignore' });
 let ws;
 try {
   for (let i = 0; i < 40 && !ws; i++) {

@@ -9,6 +9,7 @@ import { levelFor, totalTokens, xpFor } from '../lib/leveling';
 import { popXp } from '../lib/effects';
 import { formatTokens } from '../lib/format';
 import { modeChangeLine } from '../lib/permissions';
+import type { AttachedImage } from '../lib/queue';
 import type { ClaudeEvent, ModelAlias, Usage } from '../types';
 
 export interface Streaming {
@@ -19,6 +20,32 @@ export interface Streaming {
 }
 
 const EMPTY_STREAM: Streaming = { wsId: null, text: '', thinking: '' };
+
+/**
+ * The streamed text lives outside React state: only the chat log subscribes (useSyncExternalStore), so a
+ * frame of new text re-renders that log instead of the whole app (strip, HUD, panel, drawer).
+ */
+export interface StreamStore {
+  get: () => Streaming;
+  subscribe: (listener: () => void) => () => void;
+}
+
+function createStreamStore(): StreamStore & { set: (next: Streaming) => void } {
+  let value = EMPTY_STREAM;
+  const listeners = new Set<() => void>();
+  return {
+    get: () => value,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    set(next) {
+      if (next === value || (next.text === value.text && next.thinking === value.thinking && next.wsId === value.wsId)) return;
+      value = next;
+      listeners.forEach((l) => l());
+    },
+  };
+}
 const EMPTY_USAGE: Usage = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
 
 const addUsage = (a: Usage, b: Usage): Usage => ({
@@ -48,10 +75,12 @@ export interface ClaudeRun {
   busyNow: () => boolean;
   /** Workspace the current run belongs to (null when idle). */
   runWsId: string | null;
-  streaming: Streaming;
+  /** Text still streaming in (subscribe with useSyncExternalStore; see StreamStore). */
+  stream: StreamStore;
   /** Tokens used so far in the current run (null when idle). */
   liveUsage: Usage | null;
-  send: (wsId: string, prompt: string, model: ModelAlias) => void;
+  /** `images` are staged ids + thumbnails: the thumbnails are saved with the message, main sends the originals. */
+  send: (wsId: string, prompt: string, model: ModelAlias, images?: AttachedImage[]) => void;
   stop: () => void;
   /** Handles an inner event of a delegation that is not a shown agent as an ordinary tool line or text. */
   replay: (ev: ClaudeEvent) => void;
@@ -99,7 +128,10 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
   const onEndRef = useRef(onEnd);
   onEndRef.current = onEnd;
   const [activeRunWsId, setActiveRunWsId] = useState<string | null>(null);
-  const [streaming, setStreaming] = useState<Streaming>(EMPTY_STREAM);
+  const streamStore = useRef<ReturnType<typeof createStreamStore> | null>(null);
+  streamStore.current ??= createStreamStore();
+  const stream = streamStore.current;
+  const setStreaming = stream.set;
   const [liveUsage, setLiveUsage] = useState<Usage | null>(null);
   const runWsId = useRef<string | null>(null);
   const text = useRef('');
@@ -313,14 +345,14 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
   useBridgeEvent<ClaudeEvent>(bar.onClaudeEvent, handle);
 
   /** Save the user's prompt and start a run in the active workspace. */
-  const send = useCallback((wsId: string, prompt: string, model: ModelAlias) => {
+  const send = useCallback((wsId: string, prompt: string, model: ModelAlias, images: AttachedImage[] = []) => {
     stopped.current = false;
     sawError.current = false;
     pendingRef.current = true;
     lastWsId.current = wsId;
     setStarting(true);
-    persistMessage(wsId, { kind: 'user', text: prompt });
-    bar.send(prompt, model);
+    persistMessage(wsId, images.length ? { kind: 'user', text: prompt, images: images.map((i) => ({ thumb: i.thumb })) } : { kind: 'user', text: prompt });
+    bar.send(prompt, model, images.length ? images.map((i) => i.id) : undefined);
   }, [persistMessage]);
 
   const stop = useCallback(() => {
@@ -329,5 +361,5 @@ export function useClaudeRun({ game, say, setStatus, stageRef, busyRef, observe,
   }, []);
   const busyNow = useCallback(() => pendingRef.current || runningRef.current, []);
 
-  return { running, starting, busyNow, runWsId: activeRunWsId, streaming, liveUsage, send, stop, replay };
+  return { running, starting, busyNow, runWsId: activeRunWsId, stream, liveUsage, send, stop, replay };
 }

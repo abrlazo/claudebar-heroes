@@ -18,6 +18,9 @@ export interface GameApi {
   configure: (opts: { hero?: Hero | null; mapId?: string; kills?: number; level?: number }) => void;
   wake: () => void;
   sleep: () => void;
+  /** The window is hidden / shown again: pause and restart the battle loop (idempotent). */
+  suspend: () => void;
+  resume: () => void;
   toolEnemy: (name: string) => void;
   hurt: () => void;
   setAllies: (heroes: Hero[]) => void;
@@ -88,6 +91,8 @@ export function useGameEngine(hooks: GameHooks): { game: GameApi; refs: StageRef
       configure: call('configure'),
       wake: call('wake'),
       sleep: call('sleep'),
+      suspend: call('suspend'),
+      resume: call('resume'),
       toolEnemy: call('toolEnemy'),
       hurt: call('hurt'),
       setAllies: call('setAllies'),

@@ -175,6 +175,19 @@ function mix(a, b, f) {
   const m = (x, y) => Math.round(x + (y - x) * f).toString(16).padStart(2, '0');
   return `#${m(r1, r2)}${m(g1, g2)}${m(b1, b2)}`;
 }
+// Animated colours (twinkling stars, glowing lava) are picked from a cached 64-step ramp per colour pair,
+// so drawing a frame builds no colour strings.
+const RAMP_STEPS = 64;
+const ramps = new Map();
+function tween(a, b, f) {
+  const key = a + b;
+  let r = ramps.get(key);
+  if (!r) {
+    r = Array.from({ length: RAMP_STEPS + 1 }, (_, i) => mix(a, b, i / RAMP_STEPS));
+    ramps.set(key, r);
+  }
+  return r[Math.round(Math.max(0, Math.min(1, f)) * RAMP_STEPS)];
+}
 const rnd = (a, b) => a + Math.random() * (b - a);
 
 // ----- maps -----
@@ -293,7 +306,7 @@ const THEMES = {
         const w = 34 + r * 20;
         const h = 16 + r * 8;
         d.peak(x, G - 3, w, h, '#3a1512');
-        const glow = mix('#b8320f', '#ffb02e', (Math.sin(d.t * 2 + i) + 1) / 2);
+        const glow = tween('#b8320f', '#ffb02e', (Math.sin(d.t * 2 + i) + 1) / 2);
         d.rect(x - 2, G - 3 - h, 4, 2, glow);
         d.rect(x - 1, G - 3 - h - 1 - Math.round((Math.sin(d.t * 3 + i) + 1) * 1.5), 2, 1, '#ff7a2a');
       });
@@ -309,10 +322,10 @@ const THEMES = {
       d.rect(0, G, W, 1, '#4a2b25');
       // Glowing cracks
       d.scatter(1, 12, 131, 0.55, (x, r, i) => {
-        const c = mix('#c73a0f', '#ffb02e', (Math.sin(d.t * 3 + i * 1.3) + 1) / 2);
+        const c = tween('#c73a0f', '#ffb02e', (Math.sin(d.t * 3 + i * 1.3) + 1) / 2);
         d.rect(x, G + 2 + Math.round(r * 2), 3 + Math.round(r * 4), 1, c);
       });
-      d.rect(0, H - 1, W, 1, mix('#a8300c', '#ff6a00', (Math.sin(d.t * 1.7) + 1) / 2));
+      d.rect(0, H - 1, W, 1, tween('#a8300c', '#ff6a00', (Math.sin(d.t * 1.7) + 1) / 2));
     },
     particles: {
       rate: 10, max: 26, parallax: 0.7,
@@ -330,7 +343,7 @@ const THEMES = {
       d.scatter(0.02, 4, 141, 0.35, (x, r, i) => {
         const y = Math.round(hash(i, 142) * (G - 14));
         const tw = (Math.sin(d.t * (1 + r * 2) + i) + 1) / 2;
-        d.rect(x, y, 1, 1, mix('#3a3d7a', '#ffffff', tw));
+        d.rect(x, y, 1, 1, tween('#3a3d7a', '#ffffff', tw));
       });
       d.disc(Math.round(W * 0.78), 9, 5, '#f4f1c9');
       d.rect(Math.round(W * 0.78) - 2, 7, 2, 2, '#d8d4a6');
@@ -352,7 +365,7 @@ const THEMES = {
       update: (q, s, d) => { q.x += Math.sin(d.t + q.ph) * 3 * s; q.y += Math.cos(d.t * 0.8 + q.ph) * 2 * s; q.life -= s; return q.life > 0 && q.x > -2; },
       draw: (q, d) => {
         const on = (Math.sin(d.t * 3 + q.ph) + 1) / 2;
-        if (on > 0.3) d.rect(q.x, q.y, 1, 1, mix('#4a5a20', '#e6ff7a', on));
+        if (on > 0.3) d.rect(q.x, q.y, 1, 1, tween('#4a5a20', '#e6ff7a', on));
       },
     },
   },

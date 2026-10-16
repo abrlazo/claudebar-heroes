@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from 'react';
 import { AgentTabs } from './AgentTabs';
 import { PermissionCard } from './PermissionCard';
 import { MessageLog } from '../common/MessageLog';
@@ -10,9 +11,10 @@ import type { ClaudeRun } from '../../hooks/useClaudeRun';
 import { usageLine } from '../../hooks/useClaudeRun';
 import type { PermissionsApi } from '../../hooks/usePermissions';
 import type { WorkspaceActions } from '../../hooks/useWorkspaceActions';
-import type { QueuedMessage } from '../../lib/queue';
+import type { AttachedImage, QueuedMessage } from '../../lib/queue';
+import { useImageAttachments } from '../../hooks/useImageAttachments';
 import { forOwner, PERMISSION_MODE_OPTIONS } from '../../lib/permissions';
-import type { ModelAlias, PermissionMode, Workspace } from '../../types';
+import type { ChatMessage, ModelAlias, PermissionMode, Workspace } from '../../types';
 
 const IMPORT = '__import__';
 
@@ -39,7 +41,8 @@ export interface ProjectChatProps {
   queue?: QueueView;
   model: ModelAlias;
   onModelChange: (model: ModelAlias) => void;
-  onSend: (text: string) => void;
+  /** Returns false when the message was refused and the draft (and its images) should stay. */
+  onSend: (text: string, images: AttachedImage[]) => boolean | void;
   onStop: () => void;
   workspaceActions: WorkspaceActions;
   /** The archive drawer beside the panel. */
@@ -48,18 +51,30 @@ export interface ProjectChatProps {
   permissions: Pick<PermissionsApi, 'requests' | 'answer'>;
 }
 
+/**
+ * The chat log plus the Quest run's live text. Only this component subscribes to the stream, so streamed
+ * text re-renders the log, not the panel's tabs, composer and footer (or the rest of the app).
+ */
+function ChatLog({ run, wsId, agentShown, messages, visible }: {
+  run: ClaudeRun; wsId: string | null; agentShown: boolean; messages: ChatMessage[]; visible: boolean;
+}) {
+  const live = useSyncExternalStore(run.stream.subscribe, run.stream.get);
+  const showsRun = !agentShown && !!wsId && live.wsId === wsId;
+  const streaming = showsRun ? live.text : '';
+  const streamingThinking = showsRun ? live.thinking : '';
+  const working = !agentShown && !!wsId && run.running && run.runWsId === wsId && !streaming && !streamingThinking;
+  return <MessageLog messages={messages} streaming={streaming} streamingThinking={streamingThinking} working={working} visible={visible} />;
+}
+
 export function ProjectChat({
   visible, ws, run, agents, busy, projectBusy, queue, model, onModelChange, onSend, onStop, workspaceActions, archive, permissions,
 }: ProjectChatProps & { visible: boolean }) {
   const { settings, updateSettings } = useSettings();
   const { suggestions, refresh: refreshCommands } = useCommandCatalog(ws?.id ?? null);
+  const images = useImageAttachments();
   const agent = agents.agents.find((a) => a.id === agents.selectedId);
   const messages = agent ? agent.log : ws?.messages || [];
-  const showsRun = !agent && !!ws && run.streaming.wsId === ws.id;
-  const streaming = showsRun ? run.streaming.text : '';
-  const streamingThinking = showsRun ? run.streaming.thinking : '';
   const liveUsage = !agent && run.running ? run.liveUsage : null;
-  const working = !agent && !!ws && run.running && run.runWsId === ws.id && !streaming && !streamingThinking;
 
   // Cards of the tab being looked at. Requests of an observed (delegated) agent come from the Quest process,
   // so they show in the Quest tab, and the other tabs only carry a badge.
@@ -88,7 +103,7 @@ export function ProjectChat({
         asking={asking}
         questAsking={questAsking}
       />
-      <MessageLog messages={messages} streaming={streaming} streamingThinking={streamingThinking} working={working} visible={visible} />
+      <ChatLog run={run} wsId={ws?.id ?? null} agentShown={!!agent} messages={messages} visible={visible} />
       {cards.length > 0 && (
         <div className="perm-stack">
           <PermissionCard
@@ -112,7 +127,8 @@ export function ProjectChat({
           </div>
           {queue.items.map((item) => (
             <div key={item.id} className="queue-item" title={item.text}>
-              <span className="queue-text">{item.text}</span>
+              <span className="queue-text">{item.text || '(images only)'}</span>
+              {item.images?.length ? <span className="queue-badge">{`+${item.images.length} img`}</span> : null}
               <span className="queue-badge">queued</span>
               <button type="button" className="queue-x" aria-label="Remove queued message" onClick={() => queue.onRemove(item.id)}>×</button>
             </div>
@@ -125,6 +141,7 @@ export function ProjectChat({
         disabled={!ws || !!agent?.observed}
         queueable={!agent}
         onSend={onSend}
+        images={images}
         suggestions={suggestions}
         onSuggestionsOpen={refreshCommands}
         onStop={agent && !agent.observed && ws ? () => agents.stop(ws.id, agent.id) : onStop}

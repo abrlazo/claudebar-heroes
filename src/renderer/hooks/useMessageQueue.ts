@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { clearQueue, enqueue, removeItem, takeNext } from '../lib/queue';
-import type { QueuedMessage, Queues } from '../lib/queue';
+import { bar } from '../lib/bridge';
+import { clearQueue, enqueue, imageIdsOf, removeItem, takeNext } from '../lib/queue';
+import type { AttachedImage, QueuedMessage, Queues } from '../lib/queue';
 
 interface QueueState {
   queues: Queues;
@@ -12,7 +13,7 @@ export interface MessageQueue {
   /** Changes on every queue operation (effect dependency). */
   state: QueueState;
   /** false at the cap (nothing queued). */
-  add: (wsId: string, text: string) => boolean;
+  add: (wsId: string, text: string, images?: AttachedImage[]) => boolean;
   remove: (wsId: string, id: string) => void;
   clear: (wsId: string) => void;
   /** Removes and returns the oldest message. Synchronous, so it can never be taken twice. */
@@ -24,6 +25,7 @@ export interface MessageQueue {
 }
 
 const NONE: QueuedMessage[] = [];
+const discard = (ids: string[]) => { if (ids.length) bar.discardImages(ids); };
 
 /**
  * Messages typed in the Expedition chat while Claude is busy, per workspace, in memory only.
@@ -46,13 +48,20 @@ export function useMessageQueue(): MessageQueue {
 
   return useMemo<MessageQueue>(() => ({
     state,
-    add: (wsId, text) => {
-      const r = enqueue(ref.current.queues, wsId, text, crypto.randomUUID());
+    add: (wsId, text, images = []) => {
+      const r = enqueue(ref.current.queues, wsId, text, crypto.randomUUID(), images);
       if (r.ok) update((s) => ({ ...s, queues: r.queues }));
       return r.ok;
     },
-    remove: (wsId, id) => update((s) => ({ ...s, queues: removeItem(s.queues, wsId, id) })),
-    clear: (wsId) => update((s) => ({ ...s, queues: clearQueue(s.queues, wsId) })),
+    // A removed message gives its staged images back to main (a sent one keeps them: `take`).
+    remove: (wsId, id) => {
+      discard(imageIdsOf((ref.current.queues[wsId] ?? NONE).filter((m) => m.id === id)));
+      update((s) => ({ ...s, queues: removeItem(s.queues, wsId, id) }));
+    },
+    clear: (wsId) => {
+      discard(imageIdsOf(ref.current.queues[wsId] ?? NONE));
+      update((s) => ({ ...s, queues: clearQueue(s.queues, wsId) }));
+    },
     take: (wsId) => {
       const r = takeNext(ref.current.queues, wsId);
       if (r.item) update((s) => ({ ...s, queues: r.queues }));

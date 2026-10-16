@@ -4,11 +4,13 @@ import { useBridgeEvent } from './useBridgeEvent';
 import { generateHero } from '../engine/heroes.js';
 import { MAX_AGENTS, REVIEW_AGENT, handoffTask, idleLimitMs, uniqueAgentName } from '../lib/agents';
 import { dueAgents, nextDeadline } from '../lib/idle';
+import { appendLog, keepRowKey } from '../lib/messages';
 import { modeChangeLine } from '../lib/permissions';
 import type { AgentInvocation } from '../lib/agents';
 import type { GameApi } from './useGameEngine';
 import type { PermissionsApi } from './usePermissions';
 import type { AgentDefinition, AgentEvent, ArchivedAgent, ChatMessage, ClaudeEvent, Hero, Usage, Workspace } from '../types';
+import type { AttachedImage } from '../lib/queue';
 
 const DEATH_ANIMATION_MS = 600;
 
@@ -38,8 +40,8 @@ interface Delegation {
 /** Appends streamed text to the agent's last assistant message, or starts one. */
 function withText(a: Agent, text: string): Agent {
   const tail = a.log[a.log.length - 1];
-  if (tail?.kind === 'assistant') return { ...a, log: [...a.log.slice(0, -1), { ...tail, text: tail.text + text }] };
-  return { ...a, log: [...a.log, { kind: 'assistant', text }] };
+  if (tail?.kind === 'assistant') return { ...a, log: [...a.log.slice(0, -1), keepRowKey(tail, { ...tail, text: tail.text + text })] };
+  return { ...a, log: appendLog(a.log, { kind: 'assistant', text }) };
 }
 
 export interface Agent {
@@ -98,7 +100,8 @@ export interface AgentsApi {
    */
   spawn: (ws: Workspace, definition: AgentDefinition, task: string, chain?: ChainSpec) => Promise<void>;
   /** Sends a follow-up message to a finished agent by resuming its session. */
-  message: (ws: Workspace, agentId: string, prompt: string) => void;
+  /** A follow-up to a finished agent. `images` are staged ids + thumbnails (their bytes live in main). */
+  message: (ws: Workspace, agentId: string, prompt: string, images?: AttachedImage[]) => void;
   /** Cancels one running agent. */
   stop: (wsId: string, agentId: string) => void;
   stopAll: (wsId: string) => void;
@@ -295,7 +298,7 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
         updateStreamed(agentId, (a) => touch(withText(a, ev.text ?? '')));
         break;
       case 'tool':
-        update(agentId, (a) => touch({ ...a, log: [...a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }] }));
+        update(agentId, (a) => touch({ ...a, log: appendLog(a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }) }));
         game.toolEnemy(ev.name ?? '');
         break;
       case 'permission':
@@ -305,7 +308,7 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
         say('Needs your OK!', 3000);
         break;
       case 'permission-mode':
-        update(agentId, (a) => ({ ...a, lastActivityAt: Date.now(), log: [...a.log, { kind: 'meta', text: modeChangeLine(ev.mode, ev.ok === true) }] }));
+        update(agentId, (a) => ({ ...a, lastActivityAt: Date.now(), log: appendLog(a.log, { kind: 'meta', text: modeChangeLine(ev.mode, ev.ok === true) }) }));
         break;
       case 'permission-resolved':
         update(agentId, touch);
@@ -314,7 +317,7 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
       case 'error':
         failed.current.add(agentId);
         // claude.js puts error text in `message`, not `text`.
-        update(agentId, (a) => touch({ ...a, log: [...a.log, { kind: 'error', text: ev.message || ev.text || 'Agent error' }] }));
+        update(agentId, (a) => touch({ ...a, log: appendLog(a.log, { kind: 'error', text: ev.message || ev.text || 'Agent error' }) }));
         break;
       case 'result':
         if (ev.isError) failed.current.add(agentId);
@@ -322,7 +325,7 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
         update(agentId, touch);
         if (ev.costUsd != null) {
           const text = `${ev.turns} turn(s) · $${ev.costUsd.toFixed(4)}`;
-          update(agentId, (a) => touch({ ...a, log: [...a.log, { kind: 'meta', text }] }));
+          update(agentId, (a) => touch({ ...a, log: appendLog(a.log, { kind: 'meta', text }) }));
         }
         break;
       case 'end':
@@ -376,21 +379,23 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
 
   spawnRef.current = spawn;
 
-  const message = useCallback((ws: Workspace, agentId: string, prompt: string) => {
+  const message = useCallback((ws: Workspace, agentId: string, prompt: string, images: AttachedImage[] = []) => {
     const agent = agentsRef.current.find((a) => a.id === agentId);
-    if (!agent || agent.status === 'running' || agent.observed) return; // observed agents have no process to resume
+    const dropImages = () => { if (images.length) bar.discardImages(images.map((i) => i.id)); };
+    if (!agent || agent.status === 'running' || agent.observed) { dropImages(); return; } // observed agents have no process to resume
     if (!agent.sessionId) {
-      update(agentId, (a) => ({ ...a, log: [...a.log, { kind: 'error', text: 'This agent has no session to continue.' }] }));
+      dropImages();
+      update(agentId, (a) => ({ ...a, log: appendLog(a.log, { kind: 'error', text: 'This agent has no session to continue.' }) }));
       return;
     }
     stopped.current.delete(agentId);
-    update(agentId, (a) => ({ ...a, status: 'running', outcome: undefined, endedAt: undefined, lastActivityAt: Date.now(), log: [...a.log, { kind: 'user', text: prompt }] }));
+    update(agentId, (a) => ({ ...a, status: 'running', outcome: undefined, endedAt: undefined, lastActivityAt: Date.now(), log: appendLog(a.log, images.length ? { kind: 'user', text: prompt, images: images.map((i) => ({ thumb: i.thumb })) } : { kind: 'user', text: prompt }) }));
     game.wake();
-    bar.messageAgent(ws.id, agentId, agent.sessionId, agent.definition, prompt, ws.path);
+    bar.messageAgent(ws.id, agentId, agent.sessionId, agent.definition, prompt, ws.path, images.length ? images.map((i) => i.id) : undefined);
   }, [game, update]);
 
   const logMeta = useCallback((agentId: string, text: string) => {
-    update(agentId, (a) => ({ ...a, lastActivityAt: Date.now(), log: [...a.log, { kind: 'meta', text }] }));
+    update(agentId, (a) => ({ ...a, lastActivityAt: Date.now(), log: appendLog(a.log, { kind: 'meta', text }) }));
   }, [update]);
 
   const stop = useCallback((wsId: string, agentId: string) => {
@@ -419,8 +424,8 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
     update(agentId, (a) => {
       const tail = a.log[a.log.length - 1];
       let log = a.log;
-      if (isError) log = [...log, { kind: 'error', text: result || 'The agent failed' }];
-      else if (result && !(tail?.kind === 'assistant' && tail.text.trim() === result)) log = [...log, { kind: 'assistant', text: result }];
+      if (isError) log = appendLog(log, { kind: 'error', text: result || 'The agent failed' });
+      else if (result && !(tail?.kind === 'assistant' && tail.text.trim() === result)) log = appendLog(log, { kind: 'assistant', text: result });
       const now = Date.now();
       return { ...a, status: 'done', log, outcome: cancelled ? 'cancelled' : isError ? 'error' : 'done', endedAt: now, lastActivityAt: now };
     });
@@ -432,7 +437,7 @@ export function useAgents({ game, say, notify, archive, onUnclaimed, permissions
     if (ev.phase === 'end') {
       finishObserved(agentId, !!ev.isError, ev.text);
     } else if (ev.phase === 'event' && ev.inner === 'tool') {
-      update(agentId, (a) => ({ ...a, lastActivityAt: Date.now(), log: [...a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }] }));
+      update(agentId, (a) => ({ ...a, lastActivityAt: Date.now(), log: appendLog(a.log, { kind: 'tool', name: ev.name ?? 'tool', summary: ev.summary }) }));
       game.toolEnemy(ev.name ?? '');
     } else if (ev.phase === 'event' && ev.inner === 'text' && ev.text) {
       updateStreamed(agentId, (a) => ({ ...withText(a, ev.text ?? ''), lastActivityAt: Date.now() }));

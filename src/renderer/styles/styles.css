@@ -27,6 +27,25 @@ body.theme-light .queue-item { background: #dcdce8; border-color: #9a9ab0; }
 body.theme-light .queue-badge { background: #c4c4d6; color: #3b3b52; }
 body.theme-light .queue-x, body.theme-light .queue-btn { color: #3b3b52; }
 body.theme-light .msg.assistant { background: transparent; }
+.msg.md { white-space: normal; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 6px; }
+.md h3, .md h4, .md h5 { margin: 8px 0 4px; color: var(--purple); font-weight: 700; }
+.md h3 { font-size: 14px; border-bottom: 1px solid var(--purple); padding-bottom: 2px; }
+.md h4 { font-size: 13px; }
+.md h5 { font-size: 12px; }
+.md strong { color: var(--text); font-weight: 700; background: rgba(102, 126, 234, 0.22); border-radius: 3px; padding: 0 2px; }
+.md code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; background: rgba(255, 255, 255, 0.09); border-radius: 3px; padding: 0 3px; }
+.md pre { margin: 0 0 6px; padding: 6px 8px; background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px; white-space: pre; overflow-x: auto; max-width: 100%; }
+.md pre code { background: none; padding: 0; }
+.md ul, .md ol { margin: 0 0 6px; padding-left: 18px; }
+.md blockquote { margin: 0 0 6px; padding-left: 8px; border-left: 3px solid var(--purple); color: var(--muted); }
+.md hr { border: 0; border-top: 1px solid var(--muted); margin: 6px 0; }
+.md .md-link { color: var(--purple); text-decoration: underline dotted; }
+body.theme-light .md code { background: rgba(0, 0, 0, 0.07); }
+body.theme-light .md pre { background: rgba(0, 0, 0, 0.05); border-color: #d0d0d5; }
+body.theme-light .md strong { background: rgba(102, 126, 234, 0.16); }
 body.theme-light .msg.tool { color: var(--muted); }
 body.theme-light .msg.error { color: #d32f2f; }
 body.theme-light button { background: var(--ink-2); border: 1px solid #d0d0d5; }
@@ -264,6 +283,18 @@ body.panel-below #panel { top: calc(var(--strip-h) + 8px); bottom: 0; }
   font-size: 18px;
 }
 
+/* Hide button above the chat button (only rendered when main has a tray icon to bring the app back). */
+.strip-buttons { display: flex; flex-direction: column; width: 44px; border-left: 2px solid var(--purple); }
+#strip .strip-buttons button { width: 100%; border: none; border-radius: 0; background: var(--ink-2); }
+.strip-buttons #toggle-panel { flex: 1; border-left: none; }
+#strip #hide-app { height: 22px; padding: 0; font-size: 16px; line-height: 1; color: var(--muted); border-bottom: 1px solid var(--purple); }
+#strip #hide-app:hover { color: var(--purple); }
+#hide-app:focus-visible, #toggle-panel:focus-visible { outline: 2px solid var(--purple); outline-offset: -3px; }
+.hide-app-row { margin: 4px 0 8px; }
+.hide-app-row label { display: block; margin-bottom: 6px; font-size: 11px; }
+.hide-app-row select { width: 100%; margin-bottom: 8px; }
+.hide-app-row p { font-size: 11px; margin: 4px 0 0; }
+
 #ask-tab {
   padding: 4px 12px;
   font-size: 12px;
@@ -333,10 +364,11 @@ body.theme-light .agent-tab .idle.quiet { color: #a06800; }
 
 /* ---------- Archive of retired / closed agent chats (a drawer beside the panel) ---------- */
 
-/* The window is --main-w wide, or 608px wider while the drawer is open (main.js). The strip and panel
-   hold to the edge that does not move, so they stay put when the window grows. */
-body.drawer-left #strip, body.drawer-left #panel { left: auto; right: 0; width: var(--main-w); }
-body.drawer-right #strip, body.drawer-right #panel { left: 0; right: auto; width: var(--main-w); }
+/* The window is --main-w wide, or 608px wider (permanently in the fixed layout: body.win-left / win-right; only while
+   the drawer is open in the fit-to-open fallback: body.drawer-left / drawer-right). The strip and panel hold to the
+   edge that does not move, so they stay put. */
+body.drawer-left #strip, body.drawer-left #panel, body.win-left #strip, body.win-left #panel { left: auto; right: 0; width: var(--main-w); }
+body.drawer-right #strip, body.drawer-right #panel, body.win-right #strip, body.win-right #panel { left: 0; right: auto; width: var(--main-w); }
 
 #archive-drawer {
   position: absolute;
@@ -442,7 +474,23 @@ body.theme-light .archive-badge.cancelled { color: #a06800; }
   border-radius: var(--radius);
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
   overflow: hidden;
+  animation: panel-in 0.14s ease-out; /* 140 ms = PANEL_ANIM_MS in hooks/usePanel.ts */
 }
+#panel.closing { animation: panel-out 0.14s ease-out forwards; pointer-events: none; }
+body.panel-closing #archive-drawer { animation: panel-out 0.14s ease-out forwards; pointer-events: none; }
+@keyframes panel-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes panel-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(8px); } }
+body.panel-below #panel { animation-name: panel-in-below; }
+body.panel-below #panel.closing { animation-name: panel-out-below; }
+@keyframes panel-in-below { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+@keyframes panel-out-below { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-8px); } }
+@media (prefers-reduced-motion: reduce) { #panel, #panel.closing, body.panel-closing #archive-drawer { animation: none !important; } }
+
+/* Fixed-size window (main/window-layout.js): the panel and the drawer are sized by --panel-h (set from the saved height,
+   at most what the window holds), so resizing is live. --panel-h is panel + 8px gap. The fit-to-open fallback has no
+   body.win-fixed and keeps sizing them from the window (top: 0, bottom: strip + gap). */
+body.win-fixed #panel, body.win-fixed #archive-drawer { top: auto; height: calc(var(--panel-h, 500px) - 8px); }
+body.win-fixed.panel-below #panel, body.win-fixed.panel-below #archive-drawer { top: calc(var(--strip-h) + 8px); bottom: auto; }
 
 .panel-tabs {
   display: flex;
@@ -474,9 +522,10 @@ body.theme-light .archive-badge.cancelled { color: #a06800; }
 .msg.error { color: #ff8080; font-size: 12px; }
 .msg.meta { color: var(--muted); font-size: 11px; text-align: center; }
 
-.composer { display: flex; gap: 6px; position: relative; }
+.composer { display: flex; flex-wrap: wrap; gap: 6px; position: relative; }
 .composer textarea {
   flex: 1;
+  min-width: 0;
   resize: none;
   background: var(--ink-2);
   border: 1px solid #3a3a5c;
@@ -485,6 +534,24 @@ body.theme-light .archive-badge.cancelled { color: #a06800; }
   outline: none;
 }
 .composer textarea:focus { border-color: var(--purple); }
+/* Image attachments: a chip row above the box, a paperclip beside it, a dashed outline while a file is dragged over. */
+.composer.drop-target { outline: 2px dashed var(--purple); outline-offset: 2px; border-radius: 6px; }
+.attach-btn { padding: 4px 8px; }
+.attach-btn:disabled { opacity: 0.5; cursor: default; }
+.attach-chips { flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-height: 64px; overflow-y: auto; }
+.attach-chip { position: relative; flex: none; width: 48px; height: 48px; border: 1px solid #3a3a5c; border-radius: 6px; background: var(--ink-2); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.attach-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attach-loading { color: var(--muted); }
+.attach-x { position: absolute; top: 0; right: 0; width: 16px; height: 16px; padding: 0; border: none; border-radius: 0 0 0 6px; background: rgba(0, 0, 0, 0.65); color: #fff; font-size: 12px; line-height: 16px; cursor: pointer; }
+.attach-count { font-size: 10px; color: var(--muted); }
+.attach-error { font-size: 11px; color: #ff8080; }
+.attach-error:empty { display: none; }
+.msg-thumbs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+.msg-thumb { height: 64px; max-width: 96px; border-radius: 4px; object-fit: cover; display: block; }
+.msg-images-gone { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
+body.theme-light .attach-x { background: rgba(0, 0, 0, 0.65); color: #fff; border: none; }
+body.theme-light .attach-chip { border-color: #d0d0d5; }
+body.theme-light .attach-error { color: #c0392b; }
 .composer .send { background: var(--purple); border-color: var(--purple); }
 .composer .stop { background: #b23a48; border-color: #b23a48; }
 
@@ -878,3 +945,28 @@ body.theme-light .achievement { border-color: #a06a00; }
 .achievement-name { font-weight: bold; }
 .achievement-desc { color: var(--muted); }
 .achievement.locked { border-color: transparent; opacity: 0.55; }
+
+/* ---------- Notifications: settings and the in-panel toast ---------- */
+
+.settings-controls label.notify-option { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 12px; cursor: pointer; }
+.settings-controls label.notify-option input { margin: 0; }
+#notify-test { margin: 2px 0 6px; }
+#notify-test-note { font-size: 11px; margin: 0 0 6px; }
+
+/* Plain text only; it sits over the top of the open panel, never takes focus and goes away by itself. */
+.notify-cue {
+  position: absolute; top: 44px; left: 8px; right: 8px; z-index: 5; display: flex; align-items: center; gap: 8px;
+  background: #1f3d2c; color: #ecebff; border: 1px solid #4fae6a; border-left-width: 4px; border-radius: 8px; padding: 6px 8px; font-size: 12px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45); animation: notify-in 0.2s ease-out;
+}
+.notify-cue.bad { background: #4a2323; border-color: #c05a5a; }
+.notify-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.notify-show { flex: none; padding: 1px 10px; border-radius: 6px; font-size: 12px; }
+.notify-x { flex: none; background: none; border: none; color: inherit; font-size: 16px; line-height: 1; padding: 0 4px; cursor: pointer; opacity: 0.8; }
+.notify-x:hover { opacity: 1; }
+@keyframes notify-in { from { transform: translateY(-8px); opacity: 0; } to { transform: none; opacity: 1; } }
+/* --ink is light in the light theme, so the white bubble needs its own dark text (also for the notification bubble). */
+body.theme-light #bubble { color: #1a1a2e; border: 1px solid #d0d0d5; }
+body.theme-light .notify-cue { background: #e3f4e8; color: #1a1a2e; border-color: #2e7d46; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2); }
+body.theme-light .notify-cue.bad { background: #fde8e8; border-color: #b03a3a; }
+@media (prefers-reduced-motion: reduce) { .notify-cue { animation: none; } }

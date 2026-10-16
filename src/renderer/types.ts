@@ -14,10 +14,22 @@ export type Theme = 'dark' | 'light';
 export type ModelAlias = 'opus' | 'sonnet' | 'haiku';
 /** Where the archive drawer sits: left or right of the chat panel (the window widens), or over it when there is no room. */
 export type DrawerMode = 'left' | 'right' | 'overlay';
+/** What main's window holds (main -> renderer only): the panel's side, the room for it and the drawer mode.
+ *  `fixed`: the OS window never resizes for the panel or drawer (open / close is CSS); false = the old fit-to-open window. */
+export interface PanelLayout {
+  side: 'above' | 'below';
+  /** Panel height + gap main would show for the saved setting. */
+  panelH: number;
+  /** The most the window can hold (fixed layout), 1000 otherwise. */
+  maxPanelH: number;
+  drawerMode: DrawerMode;
+  fixed: boolean;
+}
 /** A chat entry. Tool calls carry a name/summary, everything else text. */
 export type ChatMessage =
   | { kind: 'tool'; name: string; summary?: string }
-  | { kind: 'user' | 'assistant' | 'error' | 'meta' | 'thinking'; text: string };
+  | { kind: 'user'; text: string; images?: { thumb: string }[]; imageCount?: number }
+  | { kind: 'assistant' | 'error' | 'meta' | 'thinking'; text: string };
 
 /** Something that can follow a "/" in the chat: an agent, a skill, a custom command, or a built-in Claude Code command. */
 export interface CommandEntry {
@@ -96,6 +108,8 @@ export interface WorkspaceStats {
   mapsSeen: string[];
 }
 
+export type MinimizeTo = 'bubble' | 'tray';
+
 export interface Settings {
   permissionMode: PermissionMode;
   windowPos: { x: number; y: number } | null;
@@ -103,6 +117,11 @@ export interface Settings {
   activeId: string | null;
   theme: Theme;
   panelHeight: number;
+  /** Notify (OS notification, or an in-app cue) when work finishes / when something fails. Booleans only. */
+  notifyDone: boolean;
+  notifyFail: boolean;
+  /** Where "Hide the app" goes: a small floating bubble, or only the tray icon. (The bubble's position is main-only.) */
+  minimizeTo?: MinimizeTo;
   /** One-time data migrations applied by the main process (read-only here). */
   migrations?: Record<string, boolean>;
 }
@@ -196,6 +215,7 @@ export interface ClaudeEvent {
    */
   mode?: PermissionMode;
   ok?: boolean;
+  /** 'permission-mode': why a switch failed. 'error': a fixed code main adds for the notification wording (not-found, start, host-unsupported, mode-switch). */
   errorCode?: string;
 }
 
@@ -214,6 +234,20 @@ export interface PermissionRequest {
   path: string;
   viaSubagent: boolean;
   expiresAt: number;
+}
+
+/** Where a notification leads (built by main from its own records). */
+export interface NotifyTarget {
+  wsId: string | null;
+  agentId: string | null;
+}
+
+/** A notification as main built it: plain text only. `title` is the short headline, `text` the full sentence. */
+export interface NotifyEvent {
+  kind: 'done' | 'failed' | 'mixed' | 'test';
+  title: string;
+  text: string;
+  target: NotifyTarget | null;
 }
 
 export interface AgentEvent extends ClaudeEvent {
@@ -248,19 +282,32 @@ export interface Bar {
   achievementSyncNoticeSeen(): Promise<Settings>;
 
   setClickThrough(ignore: boolean): void;
+  /** A panel resize is in progress (main's click-through watchdog waits; it expires by itself). */
+  setInteracting(on: boolean): void;
   focus(): void;
   dragStart(): void;
   dragEnd(): void;
   panelSide(): Promise<'above' | 'below'>;
+  /** The current layout (asked once at startup; changes arrive through onPanelLayout). */
+  panelLayout(): Promise<PanelLayout>;
   setPanelOpen(open: boolean): Promise<'above' | 'below'>;
   /** Where the archive drawer would open for the strip's current spot. */
   drawerMode(): Promise<DrawerMode>;
   /** Ask main to open or close the drawer (it chooses the mode and the window size). 'none' = closed or refused. */
   setDrawerOpen(open: boolean): Promise<DrawerMode | 'none'>;
+  /** Ask main to hide the app (it closes the panel first). `ok: false` when it cannot (no tray icon = no way back). */
+  hideWindow(): Promise<{ ok: boolean; reason?: string }>;
+  /** Whether hiding is possible at all (the tray icon exists, or the bubble can be the way back), and where it goes. */
+  windowInfo(): Promise<{ canHide: boolean; minimizeTo?: MinimizeTo; tray?: boolean; bubble?: boolean }>;
   quit(): void;
   restartApp(): void;
 
-  send(prompt: string, model: ModelAlias): void;
+  /** `imageIds` are ids from `stageImage`; main owns the bytes. */
+  send(prompt: string, model: ModelAlias, imageIds?: string[]): void;
+  /** Gives main the bytes of an attached image. Main checks them (type, size, header), keeps them and answers an id plus a small thumbnail, or a fixed refusal message. */
+  stageImage(bytes: ArrayBuffer): Promise<{ ok: true; id: string; thumb: string; size: number } | { ok: false; code: string; message: string }>;
+  /** Forgets staged images (removed chips, abandoned drafts). */
+  discardImages(ids: string[]): void;
   cancel(): void;
   newSession(): Promise<Settings>;
   info(): Promise<{ bin: string }>;
@@ -277,7 +324,7 @@ export interface Bar {
     wsId: string, definitionName: string, displayName: string, task: string,
   ): Promise<{ agent?: AgentRecord; definitionName?: string; error?: string }>;
   messageAgent(
-    wsId: string, agentId: string, sessionId: string, definitionName: string, prompt: string, cwd: string,
+    wsId: string, agentId: string, sessionId: string, definitionName: string, prompt: string, cwd: string, imageIds?: string[],
   ): void;
   /** Whether the project has .claude/review.md (the path comes from the workspace). */
   projectHasReview(wsId: string): Promise<boolean>;
@@ -298,9 +345,20 @@ export interface Bar {
   onAgentEvent(cb: (event: AgentEvent) => void): Unsubscribe;
   onGeneralChatEvent(cb: (event: ClaudeEvent) => void): Unsubscribe;
   onTogglePanel(cb: () => void): Unsubscribe;
-  onPanelSide(cb: (side: 'above' | 'below') => void): Unsubscribe;
+  onPanelLayout(cb: (layout: PanelLayout) => void): Unsubscribe;
+  /** Main made the window click-through on its own (watchdog): start over from "ignoring". */
+  onClickThroughReset(cb: () => void): Unsubscribe;
   onDrawerMode(cb: (mode: DrawerMode) => void): Unsubscribe;
   addMessage(wsId: string, message: ChatMessage): void;
+
+  /** Tells main what is on screen (tab and chat) so it does not notify about a chat you are reading. */
+  setNotifyView(view: { tab: string; wsId: string | null; agentId: string | null }): void;
+  /** Sends a test notification; `native` is whether the system one was shown (false: unavailable, blocked or rate-limited). */
+  testNotify(): Promise<{ native: boolean }>;
+  /** Main hid or showed the window (the renderer pauses the battle loop while hidden). */
+  onWindowVisible(cb: (state: { visible: boolean }) => void): Unsubscribe;
+  onNotify(cb: (note: NotifyEvent) => void): Unsubscribe;
+  onNotifyOpen(cb: (target: NotifyTarget) => void): Unsubscribe;
 }
 
 declare global {
