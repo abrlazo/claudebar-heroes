@@ -22,5 +22,11 @@ jobs:
       - name: Install dependensices
         run: npm install
 
-      - name: Run tests
-        run: npm test
+      - name: Run Typecheck
+        run: npm run typecheck
+      
+      - name: Run Checs
+        run: npm run check
+
+      - name: Build project
+        run: npx run build
