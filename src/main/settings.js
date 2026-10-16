@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { app } = require('electron');
 const { designFor, rememberDesign } = require('./hero-design');
 const { MAX_ARCHIVED, cleanArchived, cleanArchive } = require('./archive');
+const { emptySpend, cleanSpend, addResult } = require('./spend');
 const { nextDelay } = require('./write-schedule');
 const { coerceFlag } = require('./notify');
 const { coerceMode } = require('./window-visibility');
@@ -61,6 +62,7 @@ function newWorkspace(dir, extra = {}) {
     trophies: {},
     achievements: {},
     stats: emptyStats(),
+    spend: emptySpend(),
     heroDesign: null,
     ...extra,
   };
@@ -119,7 +121,7 @@ function load() {
     usage: emptyUsage(), lastContext: 0, contextWindow: 200000, messages: [], agents: [], archive: [], trophies: {}, achievements: {}, heroDesign: null, ...w,
     // No agent process survives a restart and nothing reads these stale records, so start clean.
   })).map((w) => ({
-    ...w, agents: [], stats: cleanStats(w.stats), archive: cleanArchive(w.archive),
+    ...w, agents: [], stats: cleanStats(w.stats), archive: cleanArchive(w.archive), spend: cleanSpend(w.spend),
     // A saved message may only carry thumbnails main would have accepted (see images.js).
     messages: Array.isArray(w.messages) ? trimOldThumbs(w.messages.map(cleanMessageImages)) : [],
   }));
@@ -263,6 +265,23 @@ function addStats(id, delta) {
   }) });
 }
 
+// Adds one `result` event main saw to the project's lifetime spend; only fields addResult picks are used.
+function addSpend(id, ev) {
+  const ws = get().workspaces.find((w) => w.id === id);
+  if (!ws) return null;
+  const spend = addResult(ws.spend, ev);
+  updateWorkspace(id, { spend });
+  return spend;
+}
+
+function resetSpend(id) {
+  const ws = get().workspaces.find((w) => w.id === id);
+  if (!ws) return null;
+  const spend = emptySpend();
+  updateWorkspace(id, { spend });
+  return spend;
+}
+
 // Mark a one-time migration as done and write it at once (only names main knows).
 function markMigration(name) {
   if (name !== 'achievementsBackfillV1') return get();
@@ -385,6 +404,6 @@ function clearArchive(wsId) {
 
 module.exports = {
   archiveAgent, deleteArchived, clearArchive,
-  get, set, active, updateWorkspace, addTrophy, addAchievement, addStats, markMigration, addUsage, importWorkspace, selectWorkspace, removeWorkspace, rerollHero, applyDesign,
+  get, set, active, updateWorkspace, addTrophy, addAchievement, addStats, addSpend, resetSpend, markMigration, addUsage, importWorkspace, selectWorkspace, removeWorkspace, rerollHero, applyDesign,
   newAgent, updateAgent, addAgent, removeAgent, addMessage, flushSync, onWriteError,
 };

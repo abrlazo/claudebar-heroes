@@ -5,6 +5,7 @@ import { HeroDetail } from './HeroDetail';
 import { MapPicker } from './MapPicker';
 import { Trophies } from './Trophies';
 import { Achievements } from './Achievements';
+import { Spend } from './Spend';
 import { SettingsControls } from './SettingsControls';
 import { useSettings } from '../../../context/SettingsContext';
 import type { WorkspaceActions } from '../../../hooks/useWorkspaceActions';
@@ -36,6 +37,8 @@ export function Inventory({ visible, ws, busy, actions, onPickMap, hide }: Inven
       <Achievements ws={ws} />
       <h3>Current map</h3>
       <MapPicker ws={ws} onPick={onPickMap} />
+      <h3>Spend</h3>
+      <Spend ws={ws} />
       <h3>About</h3>
       <SettingsControls />
       <p id="about" className="muted">{`Claude binary: ${bin}`}</p>

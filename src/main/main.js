@@ -606,6 +606,16 @@ function announcePendingPermissions() {
   for (const t of new Set(trackers)) announcePermission(t);
 }
 
+// Adds a finished run's cost / time to the project's lifetime spend. Main reads the `result` event itself; the renderer
+// only gets the new totals to show. Never throws into the run.
+function recordSpend(wsId, event) {
+  if (!event || event.type !== 'result') return;
+  try {
+    const spend = settings.addSpend(wsId, event);
+    if (spend) win?.webContents.send('spend:changed', { wsId, spend });
+  } catch { /* the total is display only */ }
+}
+
 // Feeds one process's events to its tracker; it only observes and never throws into the run.
 function observeRun(tracker, event) {
   if (!notifier || quitting) return;
@@ -862,6 +872,11 @@ function registerIpc() {
   ipcMain.handle('workspace:stats', (_e, id, delta) => (
     typeof id === 'string' && delta && typeof delta === 'object' ? settings.addStats(id, delta) : settings.get()
   ));
+  // Spend only changes from results main saw; the renderer can only ask for a reset of ONE known project.
+  ipcMain.handle('workspace:resetSpend', (_e, id) => {
+    if (typeof id !== 'string' || !settings.get().workspaces.some((w) => w.id === id)) return null;
+    return settings.resetSpend(id);
+  });
   ipcMain.handle('achievements:backfilled', () => settings.markMigration('achievementsBackfillV1'));
   ipcMain.handle('workspace:update', (_e, id, patch) => {
     const { kills, map } = patch; // the renderer may only touch map progress
@@ -1052,6 +1067,7 @@ function registerIpc() {
       { prompt: typeof prompt === 'string' ? prompt : '', cwd: ws.path, sessionId: ws.sessionId, permissionMode, model, promptMode: claude.projectPromptMode(permissionMode), images },
       (event) => {
         observeRun(tracker, event);
+        recordSpend(ws.id, event);
         // Everything is saved to the workspace that started the run.
         if (event.sessionId) settings.updateWorkspace(ws.id, { sessionId: event.sessionId });
         if (event.type === 'result' && event.contextWindow) {
@@ -1196,6 +1212,7 @@ function registerIpc() {
       permissionMode: settings.get().permissionMode,
     }, (event) => {
       observeAgent(tracker, agent.id, event);
+      recordSpend(wsId, event);
       win?.webContents.send('agent:event', event);
     });
     return { agent, definitionName: definition.name };
@@ -1229,6 +1246,7 @@ function registerIpc() {
       permissionMode: settings.get().permissionMode, sessionId, images,
     }, (event) => {
       observeAgent(tracker, agentId, event);
+      recordSpend(wsId, event);
       emit(event);
     });
   });

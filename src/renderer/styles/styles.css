@@ -409,6 +409,10 @@ body.theme-light .archive-item.selected { border-color: var(--purple); backgroun
 .archive-head button, .archive-delete { font-size: 11px; padding: 2px 8px; cursor: pointer; }
 .archive-clear.confirm { border-color: #e0a030; color: #e0a030; }
 body.theme-light .archive-clear.confirm { border-color: #a06800; color: #a06800; }
+.spend p { margin: 2px 0; font-size: 12px; }
+.spend-reset { font-size: 11px; padding: 2px 8px; cursor: pointer; margin-top: 4px; }
+.spend-reset.confirm { border-color: #e0a030; color: #e0a030; }
+body.theme-light .spend-reset.confirm { border-color: #a06800; color: #a06800; }
 .archive-readonly { font-size: 10px; color: var(--muted); }
 .archive-meta { font-size: 10px; color: var(--muted); }
 .archive-empty { color: var(--muted); font-size: 12px; padding: 12px 4px; }

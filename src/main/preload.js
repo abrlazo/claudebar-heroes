@@ -58,6 +58,8 @@ contextBridge.exposeInMainWorld('bar', {
   archiveAgent: (wsId, record) => ipcRenderer.invoke('agents:archive', wsId, record),
   deleteArchived: (wsId, id) => ipcRenderer.invoke('archive:delete', wsId, id),
   clearArchive: (wsId) => ipcRenderer.invoke('archive:clear', wsId),
+  resetSpend: (wsId) => ipcRenderer.invoke('workspace:resetSpend', wsId),
+  onSpendChanged: (cb) => subscribe('spend:changed', cb),
   listAgents: (wsId) => ipcRenderer.invoke('agents:list', wsId),
 
   onClaudeEvent: (cb) => subscribe('claude:event', cb),

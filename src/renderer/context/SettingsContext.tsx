@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { bar } from '../lib/bridge';
 import type { ArchivedAgent, ChatMessage, Settings, Workspace } from '../types';
 import { appendCapped } from '../lib/messages';
+import { useBridgeEvent } from '../hooks/useBridgeEvent';
 
 /** Fields of a workspace the main process lets the renderer persist directly. */
 type ProgressPatch = Partial<Pick<Workspace, 'kills' | 'map'>>;
@@ -65,6 +66,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       return false;
     }
   }, [mapWorkspace]);
+
+  // Main adds up each finished run and sends the new totals.
+  useBridgeEvent(bar.onSpendChanged, ({ wsId, spend }) => mapWorkspace(wsId, (w) => ({ ...w, spend })));
 
   const actions = useMemo(() => ({
     replace: (next: Settings) => setSettings(next),

@@ -99,6 +99,16 @@ export interface Workspace {
   achievements: Record<string, { at: number }>;
   /** Lifetime counters the achievements read (main clamps what the renderer reports). */
   stats: WorkspaceStats;
+  /** Lifetime cost / time of finished runs. Written by main from `result` events only. */
+  spend: WorkspaceSpend;
+}
+
+export interface WorkspaceSpend {
+  runs: number;
+  /** Estimated cost in micro-dollars (integer). */
+  costMicro: number;
+  durationMs: number;
+  turns: number;
 }
 
 export interface WorkspaceStats {
@@ -338,6 +348,9 @@ export interface Bar {
   archiveAgent(wsId: string, record: Omit<ArchivedAgent, 'archivedAt'>): Promise<{ archive: ArchivedAgent[] } | null>;
   deleteArchived(wsId: string, id: string): Promise<{ archive: ArchivedAgent[] } | null>;
   clearArchive(wsId: string): Promise<{ archive: ArchivedAgent[] } | null>;
+  /** Sets ONE project's spend back to zero (null: unknown project). */
+  resetSpend(wsId: string): Promise<WorkspaceSpend | null>;
+  onSpendChanged(cb: (e: { wsId: string; spend: WorkspaceSpend }) => void): Unsubscribe;
 
   onClaudeEvent(cb: (event: ClaudeEvent) => void): Unsubscribe;
   onAgentEvent(cb: (event: AgentEvent) => void): Unsubscribe;
