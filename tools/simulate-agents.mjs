@@ -745,7 +745,14 @@ try {
   // Achievements: the list renders, main ignores unknown ids and repeats, and clamps reported counters.
   await sleep(300);
   const achUi = await ev('JSON.stringify({all:document.querySelectorAll(".achievement").length,tiers:document.querySelectorAll(".achievement-tier").length})');
-  check('achievements: three tiers and every badge are listed', achUi === JSON.stringify({ all: 24, tiers: 3 }), achUi);
+  check('achievements: three tiers and every badge are listed', achUi === JSON.stringify({ all: 25, tiers: 3 }), achUi);
+  await ev('(()=>{const t=[...document.querySelectorAll(".achievement-tier")];t[t.length-1]?.scrollIntoView({block:"end"});})()');
+  await sleep(300);
+  await shot('12-achievements-light');
+  await ev('document.body.classList.remove("theme-light")');
+  await sleep(200);
+  await shot('12-achievements-dark');
+  await ev('document.body.classList.add("theme-light")');
   await evAsync('window.bar.addAchievement("sim-boss", "not-real")');
   await evAsync('window.bar.addAchievement("sim-boss", "__proto__")');
   await evAsync('window.bar.addAchievement("sim-boss", "agents-100")');
@@ -820,8 +827,14 @@ try {
   const shelf = await ev('JSON.stringify({open:[...document.querySelectorAll(".trophy:not(.locked)")].map(t=>t.querySelector(".trophy-count")?.textContent),locked:document.querySelectorAll(".trophy.locked").length})');
   check('trophies: the shelf shows the defeated boss as "x1" and the other five locked', shelf === JSON.stringify({ open: ['x1'], locked: 5 }), shelf);
   await shot('7-trophies');
-  await sleep(1500);
-  const saved = JSON.parse(fs.readFileSync(path.join(userData2, 'settings.json'), 'utf8')).workspaces[0];
+  // settings.json is written after a 2 s debounce (10 s max wait): poll for the write instead of reading once.
+  let saved = null;
+  for (let i = 0; i < 28; i++) {
+    await sleep(500);
+    try { saved = JSON.parse(fs.readFileSync(path.join(userData2, 'settings.json'), 'utf8')).workspaces[0]; } catch { saved = null; }
+    if (saved?.trophies?.['boss:forest']?.count === 1 && saved.kills === 8) break;
+  }
+  saved = saved || { trophies: {}, kills: -1, map: '' };
   check('trophies: saved in settings.json with the kills and the new map', saved.trophies?.['boss:forest']?.count === 1 && saved.trophies['boss:forest'].firstAt > 0 && saved.kills === 8 && saved.map === 'desert', JSON.stringify({ t: saved.trophies, kills: saved.kills, map: saved.map }));
   await openTabByLabel('Expedition');
   await sleep(300);
@@ -972,6 +985,9 @@ try {
       usage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }, lastContext: 0, contextWindow: 200000,
       kills: 21, map: 'desert', sessionId: null, messages: [], agents: [],
       trophies: { 'boss:forest': { count: 3, firstAt: 1 }, 'boss:lava': { count: 1, firstAt: 2 }, 'boss:legendary': { count: 1, firstAt: 3 } },
+      // Old boss badges (their trophies are reset above) next to ones that must stay.
+      achievements: { 'first-boss': { at: 1 }, 'bosses-all': { at: 2 }, 'boss-x10': { at: 3 }, 'kills-100': { at: 4 }, 'agents-10': { at: 5 } },
+      stats: { bestCombo: 2, crits: 7, agents: 11, mapsSeen: ['forest', 'desert'] },
     }],
     migrations: { trophyResetV1: true },   // an install that already had the first reset, but not the second
   }));
@@ -980,8 +996,14 @@ try {
   await sleep(1500);
   const evA = async (expr) => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result.result.value;
   const mig1 = JSON.parse(await evA('window.bar.getSettings().then(s=>JSON.stringify(s))'));
+  await evA('window.__syncBubble=0;setInterval(()=>{if((document.getElementById("bubble")?.textContent||"").startsWith("Boss trophies and boss badges were reset"))window.__syncBubble++;},100);0');
   check('migration: trophies are reset, kills, map and the marker are kept', JSON.stringify(mig1.workspaces[0].trophies) === '{}' && mig1.workspaces[0].kills === 21 && mig1.workspaces[0].map === 'desert' && mig1.migrations?.trophyResetV1 === true && mig1.migrations?.trophyResetV2 === true, JSON.stringify({ t: mig1.workspaces[0].trophies, k: mig1.workspaces[0].kills, m: mig1.migrations }));
+  const ach1 = Object.keys(mig1.workspaces[0].achievements || {});
+  check('achievement sync: boss badges without trophies are gone, the others and the stats stay, the markers are set',
+    !ach1.some((k) => ['first-boss', 'bosses-all', 'boss-x10'].includes(k)) && ach1.includes('kills-100') && ach1.includes('agents-10') && mig1.workspaces[0].stats?.crits === 7 && mig1.workspaces[0].stats?.agents === 11
+    && mig1.migrations?.achievementSyncV1 === true, JSON.stringify({ ach1, m: mig1.migrations }));
   const onDisk = readSaved();
+  check('achievement sync: the marker and the removal are on disk at once', onDisk.migrations?.achievementSyncV1 === true && !onDisk.workspaces[0].achievements['first-boss'] && onDisk.workspaces[0].achievements['kills-100']);
   check('migration: the marker is on disk at once (before any other change)', onDisk.migrations?.trophyResetV1 === true && onDisk.migrations?.trophyResetV2 === true && JSON.stringify(onDisk.workspaces[0].trophies) === '{}' && onDisk.workspaces[0].kills === 21);
   await click('#toggle-panel');
   await sleep(900);
@@ -993,7 +1015,12 @@ try {
   await evA('window.bar.addTrophy("sim-mig", "boss:snowy")');
   await evA('window.bar.updateSettings({ migrations: {} })');
   await evA('window.bar.setSettings({ migrations: {} })');
+  await evA('window.bar.updateSettings({ migrations: { achievementSyncNotice: true } })');
+  await evA('window.bar.setSettings({ migrations: { achievementSyncV1: false } })');
   const mig2 = JSON.parse(await evA('window.bar.getSettings().then(s=>JSON.stringify(s))'));
+  check('achievement sync: the renderer cannot clear or set the markers', mig2.migrations?.achievementSyncV1 === true);
+  await sleep(4000);
+  check('achievement sync: the bubble was shown (once, then the flag is cleared by main)', (await evA('window.__syncBubble')) > 0 && !readSaved().migrations?.achievementSyncNotice, `${await evA('window.__syncBubble')} / ${JSON.stringify(readSaved().migrations)}`);
   check('migration: the renderer cannot clear the marker (settings:update and settings:set)', mig2.migrations?.trophyResetV1 === true && mig2.migrations?.trophyResetV2 === true && mig2.workspaces[0].trophies['boss:snowy']?.count === 1, JSON.stringify(mig2.migrations));
   await sleep(1500);
   stopApp();
@@ -1004,6 +1031,13 @@ try {
   await sleep(1500);
   const mig3 = JSON.parse(await evA('window.bar.getSettings().then(s=>JSON.stringify(s))'));
   check('migration: a trophy earned afterwards survives a restart, the reset does not run again', mig3.workspaces[0].trophies['boss:snowy']?.count === 1 && mig3.migrations?.trophyResetV1 === true && mig3.migrations?.trophyResetV2 === true && mig3.workspaces[0].kills === 21, JSON.stringify({ t: mig3.workspaces[0].trophies, m: mig3.migrations }));
+  const ach3 = Object.keys(mig3.workspaces[0].achievements || {});
+  check('achievement sync: a restart does not run it again and the later trophy brought its badge', mig3.migrations?.achievementSyncV1 === true && !mig3.migrations?.achievementSyncNotice && ach3.includes('first-boss') && !ach3.includes('boss-x10') && ach3.includes('kills-100'), JSON.stringify({ ach3, m: mig3.migrations }));
+  await evA('window.bar.addTrophy("sim-mig", "boss:legendary")');
+  await ev('location.reload()'); // the renderer reads the new trophy from main, the badge is then awarded by its own rules
+  await sleep(3500);
+  const mig4 = JSON.parse(await evA('window.bar.getSettings().then(s=>JSON.stringify(s))'));
+  check('achievement sync: a legendary trophy earned later unlocks Dragon Slayer (not Giant Slayer twice)', !!mig4.workspaces[0].achievements?.['dragon-slayer'] && !mig4.workspaces[0].achievements?.['bosses-all'], JSON.stringify(Object.keys(mig4.workspaces[0].achievements || {})));
   check('migration: no page errors', pageErrors.length === 0, pageErrors.join(' | '));
 
   // ===== Phase 3: "summon <name>": hand-built characters, and a look designed by Claude for any other name =====

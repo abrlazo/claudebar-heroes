@@ -28,7 +28,8 @@ const combo = (n: number) => (s: AchievementSnapshot) => s.stats.bestCombo >= n;
 const crits = (n: number) => (s: AchievementSnapshot) => s.stats.crits >= n;
 const agents = (n: number) => (s: AchievementSnapshot) => s.stats.agents >= n;
 const bosses = (s: AchievementSnapshot) => Object.keys(s.trophies || {});
-// "All 5 map bosses" counts the map ids only: the legendary trophy ("boss:legendary") must not stand in for one.
+// "A map boss" and "all 5 map bosses" count the map ids only: the legendary trophy ("boss:legendary") must not stand in for one.
+// The trophy-based rules are mirrored in main/achievement-sync.js (one-time migration); npm run check compares them.
 const mapBosses = (s: AchievementSnapshot) => bosses(s).filter((id) => /^boss:(forest|desert|snowy|lava|night)$/.test(id));
 
 // Thresholds are guesses: tune them here. Each id is also allowlisted in main/main.js (npm run check compares them).
@@ -48,7 +49,7 @@ export const ACHIEVEMENTS: Achievement[] = [
   { id: 'level-15', name: 'Awakened', desc: 'Reach level 15 (aura)', tier: 'medium', test: level(15) },
   { id: 'combo-5', name: 'Unstoppable', desc: 'Reach a combo of 5', tier: 'medium', test: combo(5) },
   { id: 'crits-100', name: 'Sharp Eye', desc: 'Land 100 critical hits', tier: 'medium', test: crits(100) },
-  { id: 'first-boss', name: 'Giant Slayer', desc: 'Defeat a map boss', tier: 'medium', test: (s) => bosses(s).length >= 1 },
+  { id: 'first-boss', name: 'Giant Slayer', desc: 'Defeat a map boss', tier: 'medium', test: (s) => mapBosses(s).length >= 1 },
   { id: 'agents-10', name: 'Guild Master', desc: 'Start 10 agents', tier: 'medium', test: agents(10) },
   { id: 'maps-all', name: 'World Traveller', desc: 'Visit all 5 maps', tier: 'medium', test: (s) => ALL_MAPS.every((m) => s.stats.mapsSeen.includes(m)) },
   // Long term: months
@@ -57,7 +58,8 @@ export const ACHIEVEMENTS: Achievement[] = [
   { id: 'level-25', name: 'Stormbringer', desc: 'Reach level 25 (lightning)', tier: 'long', test: level(25) },
   { id: 'level-45', name: 'Ascended', desc: 'Reach level 45', tier: 'long', test: level(45) },
   { id: 'bosses-all', name: 'Boss Hunter', desc: 'Fell all 5 map bosses', tier: 'long', test: (s) => mapBosses(s).length >= 5 },
-  { id: 'boss-x10', name: 'Grudge Match', desc: 'Beat the same boss 10 times', tier: 'long', test: (s) => Object.values(s.trophies || {}).some((t) => t.count >= 10) },
+  { id: 'dragon-slayer', name: 'Dragon Slayer', desc: 'Defeat the legendary dragon', tier: 'long', test: (s) => (s.trophies?.['boss:legendary']?.count ?? 0) >= 1 },
+  { id: 'boss-x3', name: 'Grudge Match', desc: 'Beat the same boss 3 times', tier: 'long', test: (s) => Object.values(s.trophies || {}).some((t) => t.count >= 3) },
   { id: 'agents-100', name: 'Army of Spirits', desc: 'Start 100 agents', tier: 'long', test: agents(100) },
   { id: 'tokens-10m', name: 'Context Hoarder', desc: 'Use 10 million tokens', tier: 'long', test: (s) => s.tokens >= 10_000_000 },
 ];

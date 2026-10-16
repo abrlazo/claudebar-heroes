@@ -95,7 +95,7 @@ export interface Workspace {
   archive: ArchivedAgent[];
   /** Map and legendary bosses defeated, by boss id ("boss:forest"). */
   trophies: Record<string, { count: number; firstAt: number }>;
-  /** Earned achievements by id (main allowlists the ids). Never removed once earned. */
+  /** Earned achievements by id (main allowlists the ids). Never removed once earned, except the one-time boss-badge sync by main (migrations.achievementSyncV1). */
   achievements: Record<string, { at: number }>;
   /** Lifetime counters the achievements read (main clamps what the renderer reports). */
   stats: WorkspaceStats;
@@ -278,6 +278,8 @@ export interface Bar {
   addStats(id: string, delta: Partial<WorkspaceStats>): Promise<Settings>;
   /** The silent first-load unlock of already-earned achievements is done (sets the migration flag). */
   achievementsBackfilled(): Promise<Settings>;
+  /** The one-time "boss badges were re-synced" bubble was shown: main clears the pending flag. */
+  achievementSyncNoticeSeen(): Promise<Settings>;
 
   setClickThrough(ignore: boolean): void;
   /** A panel resize is in progress (main's click-through watchdog waits; it expires by itself). */

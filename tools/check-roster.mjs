@@ -138,7 +138,30 @@ check('achievements: ids are unique and there are some', achIds.length > 0 && ne
 check('achievements: every tier has at least one', ['short', 'medium', 'long'].every((t) => achTiers.includes(t)) && achTiers.length === achIds.length);
 check('achievements: the allowlist in main.js matches the table', JSON.stringify([...mainIds].sort()) === JSON.stringify([...achIds].sort()), `main ${mainIds.length}, table ${achIds.length}`);
 
-check('achievements: "all map bosses" counts only the five map ids, not the legendary', /const mapBosses = .*forest\|desert\|snowy\|lava\|night\)/.test(achSrc) && /id: 'bosses-all'.*mapBosses\(s\)\.length >= 5/.test(achSrc));
+check('achievements: first-boss and bosses-all count map ids only, the dragon has its own badge, boss-x10 is retired',
+  /const mapBosses = .*forest\|desert\|snowy\|lava\|night\)/.test(achSrc) && /id: 'first-boss'.*mapBosses\(s\)\.length >= 1/.test(achSrc)
+  && /id: 'bosses-all'.*mapBosses\(s\)\.length >= 5/.test(achSrc) && /id: 'dragon-slayer'.*boss:legendary/.test(achSrc)
+  && achIds.includes('boss-x3') && !achIds.includes('boss-x10') && achIds.length === 25);
+
+// The trophy rules exist twice (the table here, main/achievement-sync.js for the one-time migration): they must agree.
+{
+  const { stripTypeScriptTypes } = await import('node:module');
+  const t2 = fs.mkdtempSync(path.join(os.tmpdir(), 'cbh-ach-'));
+  fs.writeFileSync(path.join(t2, 'ach.mjs'), stripTypeScriptTypes(achSrc));
+  const { ACHIEVEMENTS } = await import(pathToFileURL(path.join(t2, 'ach.mjs')).href);
+  fs.rmSync(t2, { recursive: true, force: true });
+  const { TROPHY_RULES } = createRequire(import.meta.url)(path.join(root, 'src/main/achievement-sync.js'));
+  const T = (o) => Object.fromEntries(Object.entries(o).map(([k, count]) => [k, { count, firstAt: 1 }]));
+  const maps = ['forest', 'desert', 'snowy', 'lava', 'night'].map((m) => `boss:${m}`);
+  const fixtures = [{}, { 'boss:legendary': 1 }, { 'boss:legendary': 3 }, Object.fromEntries(maps.slice(0, 4).map((m) => [m, 1])), Object.fromEntries(maps.map((m) => [m, 1])),
+    { 'boss:snowy': 2 }, { 'boss:snowy': 3 }, { 'boss:lava': 12 }, { 'boss:legendary': 1, 'boss:night': 1 }, { 'boss:bogus': 5 }].map(T);
+  const rules = Object.keys(TROPHY_RULES);
+  const agree = rules.every((id) => {
+    const a = ACHIEVEMENTS.find((x) => x.id === id);
+    return a && fixtures.every((t) => a.test({ kills: 0, level: 1, tokens: 0, trophies: t, stats: { bestCombo: 0, crits: 0, agents: 0, mapsSeen: [] } }) === TROPHY_RULES[id](t));
+  });
+  check('achievements: main/achievement-sync.js rules agree with the table on every fixture', agree && rules.length === 4, rules.join(','));
+}
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nAll roster checks passed');
 process.exit(failed ? 1 : 0);

@@ -112,6 +112,26 @@ export function useAchievements(say: (text: string, ms?: number) => void, active
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per launch until main confirms
   }, [backfilled]);
 
+  // One-time bubble after main re-synced the boss badges (flag set only if something was removed). The wait keeps it
+  // clear of an "Achievement:" toast; main clears the flag after it was shown, so it is not repeated on the next launch.
+  const syncNotice = settings.migrations?.achievementSyncNotice === true;
+  const noticeShown = useRef(false);
+  useEffect(() => {
+    if (!syncNotice || noticeShown.current) return;
+    const t = setTimeout(() => {
+      noticeShown.current = true;
+      say('Boss trophies and boss badges were reset: bosses are much rarer now', 7000);
+      bar.achievementSyncNoticeSeen().then((next) => {
+        if (next && !next.migrations?.achievementSyncNotice) {
+          const { achievementSyncNotice, ...rest } = getSettings().migrations || {};
+          updateSettingsLocal({ migrations: rest });
+        }
+      });
+    }, 2500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the flag changes
+  }, [syncNotice]);
+
   // Evaluate the active workspace when its progress changes (after the backfill, so old unlocks stay silent).
   const snap = activeWs ? snapshotOf(activeWs) : null;
   const key = activeWs && snap
