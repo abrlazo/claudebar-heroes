@@ -1006,6 +1006,36 @@ try {
   check('migration: a trophy earned afterwards survives a restart, the reset does not run again', mig3.workspaces[0].trophies['boss:snowy']?.count === 1 && mig3.migrations?.trophyResetV1 === true && mig3.migrations?.trophyResetV2 === true && mig3.workspaces[0].kills === 21, JSON.stringify({ t: mig3.workspaces[0].trophies, m: mig3.migrations }));
   check('migration: no page errors', pageErrors.length === 0, pageErrors.join(' | '));
 
+  // ----- Spend: main adds up the `result` events it sees (an Expedition run and an agent run), nothing else can write it -----
+  const spendOf = async () => JSON.parse(await evA('window.bar.getSettings().then(s=>JSON.stringify(s.workspaces[0].spend))'));
+  const waitSpend = async (runs) => { for (let i = 0; i < 40; i++) { if ((await spendOf()).runs >= runs) return; await sleep(1000); } };
+  check('spend: a fresh project starts at zero', JSON.stringify(await spendOf()) === JSON.stringify({ runs: 0, costMicro: 0, durationMs: 0, turns: 0 }));
+  await evA('window.bar.send("plain spend run")');
+  await waitSpend(1);
+  const sp1 = await spendOf();
+  await evA('window.bar.runAgent("sim-mig", "alpha", "alpha", "spend agent run")');
+  await waitSpend(2);
+  const sp2 = await spendOf();
+  check('spend: an Expedition run and an agent run each add one run and their cost', sp1.runs === 1 && sp1.costMicro === 2000 && sp2.runs === 2 && sp2.costMicro === 4000 && sp2.turns === 6 && sp2.durationMs > sp1.durationMs, JSON.stringify({ sp1, sp2 }));
+  await evA('window.bar.setSettings({ spend: { runs: 99 }, workspaces: [{ id: "sim-mig", spend: { runs: 99, costMicro: 99 } }] })');
+  await evA('window.bar.updateWorkspace("sim-mig", { spend: { runs: 99, costMicro: 99 } })');
+  await evA('window.bar.updateSettings({ spend: { runs: 99 } })');
+  await evA('window.bar.addStats && window.bar.addStats("sim-mig", { spend: { runs: 99 } })');
+  check('spend: a forged spend through settings:set, workspace:update or settings:update changes nothing', JSON.stringify(await spendOf()) === JSON.stringify(sp2), JSON.stringify(await spendOf()));
+  check('spend: reset refuses an unknown project', (await evA('window.bar.resetSpend("nope")')) === null && (await evA('window.bar.resetSpend(5)')) === null && JSON.stringify(await spendOf()) === JSON.stringify(sp2));
+  await ev('[...document.querySelectorAll(".panel-tabs .tab")].find(t=>t.textContent==="Status")?.click()');
+  await sleep(400);
+  const spendText = await ev('document.getElementById("spend-project")?.textContent');
+  check('spend: the Status tab shows the project total', /This project: \$0\.0040 · 2 runs/.test(spendText || ''), spendText);
+  await click('#spend-reset');
+  await sleep(200);
+  check('spend: the first click on Reset only asks', (await ev('document.getElementById("spend-reset").textContent')) === 'Reset spend?' && (await spendOf()).runs === 2);
+  await click('#spend-reset');
+  await sleep(500);
+  check('spend: the second click zeroes it (main and screen)', (await spendOf()).runs === 0 && /2 runs|0 runs/.test(await ev('document.getElementById("spend-project")?.textContent')) && /\$0\.0000 · 0 runs/.test(await ev('document.getElementById("spend-project")?.textContent')));
+  await sleep(2500);
+  check('spend: zero is on disk too', JSON.stringify(readSaved().workspaces[0].spend) === JSON.stringify({ runs: 0, costMicro: 0, durationMs: 0, turns: 0 }));
+
   // ===== Phase 3: "summon <name>": hand-built characters, and a look designed by Claude for any other name =====
   stopApp();
   await sleep(1000);
