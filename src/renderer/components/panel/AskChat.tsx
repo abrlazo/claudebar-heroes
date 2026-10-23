@@ -12,9 +12,12 @@ export interface AskChatProps {
 
 /** Project-less chat ("Ask"): ask Claude anything, like a search box. */
 export function AskChat({ visible, chat, model, onModelChange }: AskChatProps & { visible: boolean }) {
+  // Busy and no answer text yet (the last row is still the user's): show the "working" line like the Quest chat.
+  const last = chat.messages[chat.messages.length - 1];
+  const working = chat.busy && (!last || last.kind === 'user');
   return (
     <div id="tab-general-chat" className={`tab-body${visible ? '' : ' hidden'}`}>
-      <MessageLog messages={chat.messages} visible={visible} />
+      <MessageLog messages={chat.messages} working={working} visible={visible} />
       <Composer
         focused={visible}
         busy={chat.busy}
