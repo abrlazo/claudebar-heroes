@@ -29,7 +29,21 @@ export interface PanelLayout {
 export type ChatMessage =
   | { kind: 'tool'; name: string; summary?: string }
   | { kind: 'user'; text: string; images?: { thumb: string }[]; imageCount?: number }
-  | { kind: 'assistant' | 'error' | 'meta' | 'thinking'; text: string };
+  | { kind: 'assistant' | 'error' | 'meta' | 'thinking'; text: string }
+  /** A `/draw` sample: `text` is the cleaned caption; `art` is dropped for old ones (`artGone`, shown as a label). */
+  | { kind: 'art'; text: string; art?: PixelArtData; artGone?: boolean };
+
+/** A validated pixel grid: rows of `.` (transparent) or one hex digit indexing `palette` (`#rrggbb`). */
+export interface PixelArtData {
+  w: number;
+  h: number;
+  palette: string[];
+  rows: string[];
+}
+
+export type DrawResult =
+  | { ok: true; art: PixelArtData; caption: string }
+  | { ok: false; code: string; message: string };
 
 /** Something that can follow a "/" in the chat: an agent, a skill, a custom command, or a built-in Claude Code command. */
 export interface CommandEntry {
@@ -269,6 +283,9 @@ export interface Bar {
   rerollHero(id: string, seed?: string): Promise<Settings>;
   /** Asks Claude (in main, no tools) to design the look of a summoned name; main validates and saves it. */
   designSummon(wsId: string, name: string): Promise<{ ok: true; cached?: boolean; settings: Settings } | { ok: false; reason: string }>;
+  /** `/draw`: main asks Claude for a pixel grid, validates it and answers with a rebuilt one (one at a time). */
+  makeDrawing(description: string): Promise<DrawResult>;
+  cancelDrawing(): void;
   updateWorkspace(id: string, patch: Partial<Pick<Workspace, 'kills' | 'map'>>): Promise<Settings>;
   /** A map or legendary boss was defeated: adds it to the workspace's trophies (main validates the boss id). */
   addTrophy(id: string, bossId: string): Promise<Settings>;

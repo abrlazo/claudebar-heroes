@@ -49,25 +49,28 @@ export interface ProjectChatProps {
   archive: { count: number; open: boolean; toggle: () => void };
   /** Pending permission requests ("Ask me each time") and the way to answer them. */
   permissions: Pick<PermissionsApi, 'requests' | 'answer'>;
+  /** A `/draw` in progress for this project's chat. */
+  drawing?: { caption: string; onCancel: () => void } | null;
 }
 
 /**
  * The chat log plus the Quest run's live text. Only this component subscribes to the stream, so streamed
  * text re-renders the log, not the panel's tabs, composer and footer (or the rest of the app).
  */
-function ChatLog({ run, wsId, agentShown, messages, visible }: {
+function ChatLog({ run, wsId, agentShown, messages, visible, drawing }: {
   run: ClaudeRun; wsId: string | null; agentShown: boolean; messages: ChatMessage[]; visible: boolean;
+  drawing: { caption: string; onCancel: () => void } | null;
 }) {
   const live = useSyncExternalStore(run.stream.subscribe, run.stream.get);
   const showsRun = !agentShown && !!wsId && live.wsId === wsId;
   const streaming = showsRun ? live.text : '';
   const streamingThinking = showsRun ? live.thinking : '';
   const working = !agentShown && !!wsId && run.running && run.runWsId === wsId && !streaming && !streamingThinking;
-  return <MessageLog messages={messages} streaming={streaming} streamingThinking={streamingThinking} working={working} visible={visible} />;
+  return <MessageLog messages={messages} streaming={streaming} streamingThinking={streamingThinking} working={working} visible={visible} drawing={agentShown ? null : drawing} />;
 }
 
 export function ProjectChat({
-  visible, ws, run, agents, busy, projectBusy, queue, model, onModelChange, onSend, onStop, workspaceActions, archive, permissions,
+  visible, ws, run, agents, busy, projectBusy, queue, model, onModelChange, onSend, onStop, workspaceActions, archive, permissions, drawing = null,
 }: ProjectChatProps & { visible: boolean }) {
   const { settings, updateSettings } = useSettings();
   const { suggestions, refresh: refreshCommands } = useCommandCatalog(ws?.id ?? null);
@@ -103,7 +106,7 @@ export function ProjectChat({
         asking={asking}
         questAsking={questAsking}
       />
-      <ChatLog run={run} wsId={ws?.id ?? null} agentShown={!!agent} messages={messages} visible={visible} />
+      <ChatLog run={run} wsId={ws?.id ?? null} agentShown={!!agent} messages={messages} visible={visible} drawing={drawing} />
       {cards.length > 0 && (
         <div className="perm-stack">
           <PermissionCard

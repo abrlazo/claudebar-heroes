@@ -10,6 +10,8 @@
   --radius: 10px;
   --panel-bg-alpha: 0.99;
   --hud-bg-alpha: 0.95;
+  --art-bg: #3b3b63; /* the card a /draw sample sits on (the art has transparent cells) */
+  --art-border: #5a5a8a;
 }
 
 /* Light theme */
@@ -20,7 +22,25 @@ body.theme-light {
   --ink-2: #e8e8eb;
   --text: #1a1a2e;
   --muted: #8a8a9e;
+  --art-bg: #c9c9d9;
+  --art-border: #9a9ab0;
 }
+
+/* /draw: the sample on a neutral framed card, the pending row with pulsing pixels */
+.msg.art { align-self: flex-start; max-width: 100%; background: transparent; padding: 4px 0; }
+.pixel-art { display: inline-block; max-width: 100%; padding: 8px; background: var(--art-bg); border: 1px solid var(--art-border); border-radius: 8px; line-height: 0; }
+.pixel-art-canvas { display: block; image-rendering: pixelated; max-width: 100%; }
+.art-caption { margin-top: 4px; font-size: 10px; color: var(--muted); }
+.msg.draw-pending { display: flex; align-items: center; gap: 8px; color: var(--muted); white-space: normal; }
+.draw-pending-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draw-pixels { display: inline-grid; grid-template-columns: repeat(2, 6px); gap: 2px; }
+.draw-pixels i { width: 6px; height: 6px; background: var(--purple); animation: draw-pulse 1.2s ease-in-out infinite; }
+.draw-pixels i:nth-child(2) { animation-delay: 0.3s; }
+.draw-pixels i:nth-child(4) { animation-delay: 0.6s; }
+.draw-pixels i:nth-child(3) { animation-delay: 0.9s; }
+@keyframes draw-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .draw-pixels i { animation: none; opacity: 0.8; } }
+body.theme-light .msg.draw-pending .queue-btn { color: #3b3b52; border-color: #8a8a9e; }
 
 body.theme-light .msg.user { background: #dcdce8; }
 body.theme-light .queue-item { background: #dcdce8; border-color: #9a9ab0; }

@@ -26,12 +26,15 @@ import { MAX_AGENTS, MAX_CHAIN_STEPS, parseAgentChain, parseAgentInvocation } fr
 import type { AgentInvocation } from './lib/agents';
 import { bar } from './lib/bridge';
 import { MAX_QUEUED } from './lib/queue';
+import { parseDrawCommand } from './lib/draw';
+import { useDrawing } from './hooks/useDrawing';
+import type { DrawTarget } from './hooks/useDrawing';
 import type { AttachedImage } from './lib/queue';
 import { useBlockFileDrop } from './hooks/useImageAttachments';
 import type { Workspace } from './types';
 import { levelFor, xpFor } from './lib/leveling';
 import { DEFAULT_ASK_MODEL, DEFAULT_PROJECT_MODEL } from './lib/models';
-import type { ClaudeEvent, MapId, ModelAlias } from './types';
+import type { ChatMessage, ClaudeEvent, MapId, ModelAlias } from './types';
 
 /**
  * Composition root. Wires the hooks together; owns no UI of its own.
@@ -125,6 +128,11 @@ function AppShell() {
   });
   replayRef.current = run.replay;
   const ask = useGeneralChat();
+  // `/draw`: a pixel-art sample. Its own one-shot process: not a run, never queued, no hero, XP or notification.
+  const drawing = useDrawing((target: DrawTarget, message: ChatMessage) => {
+    if (target.kind === 'quest') persistMessage(target.wsId, message);
+    else ask.add(message);
+  });
   const panel = usePanel();
   const notifications = useNotifications({
     panel, wsId: ws?.id ?? null, agentId: agents.selectedId, agentIds: agents.agents.map((a) => a.id), say, selectAgent: agents.select,
@@ -299,6 +307,17 @@ function AppShell() {
         await startAgent(ws, invocation, text);
         return;
       }
+      // "/draw <description>": an app command (an agent file named draw wins above). Not for an agent's tab.
+      const draw = selectedAgentRef.current ? null : parseDrawCommand(text);
+      if (draw) {
+        if ('empty' in draw) {
+          persistMessage(ws.id, { kind: 'user', text });
+          persistMessage(ws.id, { kind: 'meta', text: 'Tell me what to draw: /draw <description>' });
+        } else {
+          drawing.start({ kind: 'quest', wsId: ws.id }, draw.description, text);
+        }
+        return;
+      }
       // "/plan [task]": plan mode is the "Plan only" permission mode here, not a headless command.
       const plan = text.match(PLAN_COMMAND);
       if (plan) {
@@ -338,6 +357,18 @@ function AppShell() {
     run.send(ws.id, text, projectModel, images);
   };
 
+  // The Ask chat: `/draw <description>` draws (in memory only), everything else goes to Claude as before.
+  const sendAsk = (prompt: string, model: ModelAlias) => {
+    const draw = parseDrawCommand(prompt);
+    if (!draw) { ask.send(prompt, model); return; }
+    if ('empty' in draw) {
+      ask.add({ kind: 'user', text: prompt });
+      ask.add({ kind: 'meta', text: 'Tell me what to draw: /draw <description>' });
+    } else {
+      drawing.start({ kind: 'ask' }, draw.description, prompt);
+    }
+  };
+
   const stop = () => {
     // Stop also has to reach agents, or the UI stays busy until they finish.
     if (ws) agents.stopAll(ws.id);
@@ -368,8 +399,15 @@ function AppShell() {
             onResume: () => queue.resume(ws.id),
           } : undefined,
           model: projectModel, onModelChange: setProjectModel, onSend: onComposerSend, onStop: stop,
+          drawing: ws && drawing.pending?.target.kind === 'quest' && drawing.pending.target.wsId === ws.id
+            ? { caption: drawing.pending.caption, onCancel: drawing.cancel } : null,
         }}
-        ask={{ chat: ask, model: askModel, onModelChange: setAskModel }}
+        ask={{
+          chat: { ...ask, send: sendAsk },
+          model: askModel,
+          onModelChange: setAskModel,
+          drawing: drawing.pending?.target.kind === 'ask' ? { caption: drawing.pending.caption, onCancel: drawing.cancel } : null,
+        }}
         inventory={{ ws, busy, actions: workspaceActions, onPickMap: pickMap, hide }}
         notify={{ cue: notifications.cue, onShow: notifications.show, onDismiss: notifications.dismiss }}
       />

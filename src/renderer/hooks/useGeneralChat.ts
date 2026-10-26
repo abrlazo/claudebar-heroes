@@ -7,6 +7,8 @@ export interface GeneralChat {
   messages: ChatMessage[];
   busy: boolean;
   send: (prompt: string, model: ModelAlias) => void;
+  /** Adds a message locally (a `/draw` result); nothing is sent to Claude. */
+  add: (message: ChatMessage) => void;
   stop: () => void;
 }
 
@@ -14,6 +16,7 @@ export interface GeneralChat {
 function appendToLast(messages: ChatMessage[], extra: string): ChatMessage[] {
   const last = messages[messages.length - 1];
   if (!last || last.kind === 'tool') return messages;
+  if (last.kind === 'art') return [...messages, { kind: 'assistant', text: extra }]; // a drawing has no text to extend
   return [...messages.slice(0, -1), { ...last, text: last.text + extra }];
 }
 
@@ -75,5 +78,5 @@ export function useGeneralChat(): GeneralChat {
     bar.sendGeneralChat(prompt, model);
   }, []);
 
-  return { messages, busy, send, stop: () => bar.cancelGeneralChat() };
+  return { messages, busy, send, add: push, stop: () => bar.cancelGeneralChat() };
 }

@@ -35,7 +35,17 @@ const SUMMON: CommandSuggestion = {
   argumentHint: '<character>',
 };
 
-/** Popup entries for the commands Claude and the project offer, plus the app's own `/plan` and `summon`. */
+/** `/draw` is handled by the app (a pixel-art sample, not a Claude command); an agent file named `draw` wins over it. */
+const DRAW: CommandSuggestion = {
+  key: 'app:draw',
+  label: '/draw',
+  insert: '/draw ',
+  kind: 'app',
+  description: 'Draw a small pixel-art sample of something. Example: /draw a red dragon (replaces a skill named draw)',
+  argumentHint: '<description>',
+};
+
+/** Popup entries for the commands Claude and the project offer, plus the app's own `/plan`, `/draw` and `summon`. */
 export function toSuggestions(entries: CommandEntry[]): CommandSuggestion[] {
   return [
     ...entries.map((e): CommandSuggestion => ({
@@ -48,6 +58,7 @@ export function toSuggestions(entries: CommandEntry[]): CommandSuggestion[] {
       argumentHint: e.argumentHint || undefined,
     })),
     PLAN,
+    DRAW,
     SUMMON,
   ];
 }
