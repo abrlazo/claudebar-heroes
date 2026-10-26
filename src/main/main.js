@@ -16,6 +16,7 @@ const visibility = require('./window-visibility');
 const bubbleState = require('./bubble-state');
 const bubbleGeo = require('./bubble-geometry');
 const chatImages = require('./images');
+const pixelArt = require('./pixel-art');
 
 // Windows shows toasts only for an app with an AppUserModelId.
 if (process.platform === 'win32') app.setAppUserModelId('com.claudebar.heroes');
@@ -57,6 +58,7 @@ let dragTimer = null;
 let panelHeight = DEFAULT_PANEL_HEIGHT;
 let runningWsId = null;     // workspace of the Claude run in progress
 let mainHandle = null;      // handle to current main Claude process
+let drawing = null;           // `/draw` in progress: { controller }
 let generalChatHandle = null; // handle to general chat Claude process
 let generalSessionId = null;  // general chat conversation (kept while the app runs)
 // Hide / show (see applyVisibility). Memory only: the app always starts visible. Hiding needs a way back: the tray, or the bubble.
@@ -845,6 +847,33 @@ function registerIpc() {
       designing.delete(name);
     }
   });
+  // `/draw <description>`: one `ask()` (no tools, haiku, neutral folder) whose answer is a pixel grid.
+  // Main validates it (pixel-art.js) and returns a rebuilt object; the renderer only draws it on a canvas.
+  // One drawing at a time app-wide; it never touches runs, the queue, notifications or usage.
+  ipcMain.handle('draw:make', async (e, description) => {
+    const fail = (code) => ({ ok: false, code, message: pixelArt.MESSAGES[code] });
+    if (e.sender !== win?.webContents || typeof description !== 'string' || description.length > 4 * pixelArt.MAX_DESCRIPTION) return fail('invalid');
+    const cleaned = pixelArt.cleanText(description);
+    if (!cleaned || cleaned.length > pixelArt.MAX_DESCRIPTION) return fail('invalid');
+    if (drawing) return fail('busy');
+    const controller = new AbortController();
+    drawing = { controller };
+    try {
+      const cwd = path.join(app.getPath('userData'), 'draw-cwd');
+      fs.mkdirSync(cwd, { recursive: true });
+      const timeoutMs = Number(process.env.DRAW_TIMEOUT_MS) > 0 ? Number(process.env.DRAW_TIMEOUT_MS) : 45000;
+      const answer = await claude.ask({ prompt: pixelArt.drawPrompt(cleaned), cwd, model: 'haiku', timeoutMs, signal: controller.signal });
+      if (!answer.ok) return fail(answer.error === 'too-large' ? 'unreadable' : (pixelArt.MESSAGES[answer.error] ? answer.error : 'failed'));
+      const checked = pixelArt.validateArt(pixelArt.parseArtText(answer.text));
+      if (!checked.ok) return fail('unreadable');
+      return { ok: true, art: checked.art, caption: pixelArt.cleanCaption(cleaned) };
+    } catch {
+      return fail('failed');
+    } finally {
+      drawing = null;
+    }
+  });
+  ipcMain.on('draw:cancel', (e) => { if (e.sender === win?.webContents) drawing?.controller.abort(); });
   // Keep in sync with BOSSES and LEGENDARY_BOSS in src/renderer/engine/enemies.js.
   const isBossId = (id) => typeof id === 'string' && /^boss:(forest|desert|snowy|lava|night|legendary)$/.test(id);
   ipcMain.handle('workspace:trophy', (_e, id, bossId) => (
@@ -1346,6 +1375,7 @@ app.on('will-quit', () => {
   clearInterval(commandTimer);
   clearInterval(stagingTimer);
   staging.clear();
+  drawing?.controller.abort();
   clearInterval(dragTimer);
   stopWatchdog();
   stopBubblePoll();

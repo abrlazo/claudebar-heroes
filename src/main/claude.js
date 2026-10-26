@@ -481,6 +481,7 @@ function listCommands(cwd, timeoutMs = 6000) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       try {
         if (child?.pid) {
           if (isWin) spawn('taskkill', ['/pid', String(child.pid), '/t', '/f']);
@@ -524,10 +525,11 @@ const ASK_MAX_OUTPUT = 64 * 1024;
 
 /**
  * One-shot question to Claude with no tools and no saved session (used to design a summoned hero).
- * Resolves, never rejects: `{ ok: true, text }` or `{ ok: false, error: 'timeout' | 'not-found' | 'failed' | 'too-large' }`.
+ * Resolves, never rejects: `{ ok: true, text }` or `{ ok: false, error: 'timeout' | 'not-found' | 'failed' | 'too-large' | 'cancelled' }`.
+ * An optional `signal` (AbortSignal) kills the child and resolves 'cancelled'. Used by summon design and `/draw`.
  * `cwd` should be a neutral folder, never a project, so no project files or settings are loaded.
  */
-function ask({ prompt, cwd, model, timeoutMs = 25000 }) {
+function ask({ prompt, cwd, model, timeoutMs = 25000, signal }) {
   return new Promise((resolve) => {
     let child;
     let settled = false;
@@ -536,6 +538,7 @@ function ask({ prompt, cwd, model, timeoutMs = 25000 }) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       try {
         if (child?.pid) {
           if (isWin) spawn('taskkill', ['/pid', String(child.pid), '/t', '/f']);
@@ -544,7 +547,10 @@ function ask({ prompt, cwd, model, timeoutMs = 25000 }) {
       } catch { /* already gone */ }
       resolve(value);
     };
+    const onAbort = () => done({ ok: false, error: 'cancelled' });
     const timer = setTimeout(() => done({ ok: false, error: 'timeout' }), timeoutMs);
+    if (signal?.aborted) { onAbort(); return; }
+    signal?.addEventListener('abort', onAbort, { once: true });
     const args = ['-p', '--output-format', 'json', '--tools', '', '--max-turns', '1', '--no-session-persistence',
       '--disable-slash-commands', '--permission-mode', 'default'];
     if (model) args.push('--model', model);

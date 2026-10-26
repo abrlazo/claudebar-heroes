@@ -11,6 +11,7 @@ const { coerceFlag } = require('./notify');
 const { coerceMode } = require('./window-visibility');
 const { cleanBubblePos } = require('./bubble-geometry');
 const { cleanMessageImages, trimOldThumbs } = require('./images');
+const { cleanMessageArt, trimOldArt } = require('./pixel-art');
 
 const DEFAULTS = {
   permissionMode: 'default',
@@ -122,7 +123,7 @@ function load() {
   })).map((w) => ({
     ...w, agents: [], stats: cleanStats(w.stats), archive: cleanArchive(w.archive),
     // A saved message may only carry thumbnails main would have accepted (see images.js).
-    messages: Array.isArray(w.messages) ? trimOldThumbs(w.messages.map(cleanMessageImages)) : [],
+    messages: Array.isArray(w.messages) ? trimOldArt(trimOldThumbs(w.messages.map((m) => cleanMessageArt(cleanMessageImages(m))))) : [],
   }));
   // One-time resets of the trophy shelf: bosses became rare (V1), then rarer (1%) with a legendary one (V2).
   // Kills, map and everything else stay.
@@ -294,8 +295,9 @@ function addMessage(wsId, message) {
   const ws = s.workspaces.find((w) => w.id === wsId);
   if (!ws) return null;
   ws.messages = ws.messages || [];
-  ws.messages.push(cleanMessageImages(message)); // image fields are rebuilt from an allowlist
+  ws.messages.push(cleanMessageArt(cleanMessageImages(message))); // image and art fields are rebuilt from allowlists
   trimOldThumbs(ws.messages);
+  trimOldArt(ws.messages);
   // The whole file is rewritten on every message; keep history bounded.
   if (ws.messages.length > MAX_MESSAGES) ws.messages.splice(0, ws.messages.length - MAX_MESSAGES);
   return set({ workspaces: s.workspaces });

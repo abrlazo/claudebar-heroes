@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('bar', {
   removeWorkspace: (id) => ipcRenderer.invoke('workspace:remove', id),
   rerollHero: (id, seed) => ipcRenderer.invoke('workspace:reroll', id, seed),
   designSummon: (wsId, name) => ipcRenderer.invoke('summon:design', wsId, name),
+  makeDrawing: (description) => ipcRenderer.invoke('draw:make', description),
+  cancelDrawing: () => ipcRenderer.send('draw:cancel'),
   addTrophy: (id, bossId) => ipcRenderer.invoke('workspace:trophy', id, bossId),
   addAchievement: (id, achId) => ipcRenderer.invoke('workspace:achievement', id, achId),
   addStats: (id, delta) => ipcRenderer.invoke('workspace:stats', id, delta),
