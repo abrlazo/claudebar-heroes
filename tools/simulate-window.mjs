@@ -272,6 +272,7 @@ try {
   check('2 a second hide is a no-op (changed false, still hidden)', lastV().changed === false && lastV().visible === false);
   await showViaTray();
   check('2 tray: shows (changed, visible, reason tray)', lastV().changed === true && lastV().visible === true && lastV().reason === 'tray' && lastV().action === 'show', JSON.stringify(lastV()));
+  check('2 tray: the chat opens with the strip', await until(panelOpen, 4000));
   check('2 the tray show took the bubble down first: the bubble is hidden and was never shown together with the strip', bubbleLast('hide')?.bubbleVisible === false && bubbleLast('hide')?.stripVisible === false && bubbleOnlyOne());
   command('tray');
   await waitV(before2 + 3);
@@ -338,7 +339,7 @@ try {
   await mouse('mousePressed', p);
   await mouse('mouseReleased', p);
   await sleep(900);
-  check('11 and a click on the chat button opens the panel', await panelOpen());
+  check('11 and a real click on the chat button reaches the page: the panel the tray show opened closes', await until(async () => !(await panelOpen()), 4000));
   await setPanel(false);
 
   // Watchdog: the window takes the mouse but the (fake) cursor is far outside the strip and the closed panel, so main
@@ -367,9 +368,10 @@ try {
   check('race: chat click and hide in the same tick leave main and the page closed', lastV().visible === false && lastV().panelOpen === false && !(await panelOpen()), JSON.stringify(lastV()));
   await showViaTray();
   await sleep(600);
-  check('race: after the show the panel is still closed', !(await panelOpen()) && lastV().panelOpen === false);
+  check('race: after the tray show the chat opens, and the window is not stuck in the closed state', await until(panelOpen, 4000));
+  await setPanel(false);
 
-  // ----- 6. every way back; shortcut and notification click open the panel, tray and second launch do not -----
+  // ----- 6. every way back; shortcut, notification click, tray and bubble open the panel, a second launch does not -----
   await hideViaButton();
   command('shortcut');
   await waitV(vlines().length + 1);
@@ -534,6 +536,7 @@ try {
   await waitV(vBefore + 1, 5000);
   await sleep(800);
   check('12b a click (3 px of movement) shows the strip with reason bubble, and the second click is ignored', vlines().length === vBefore + 1 && lastV().reason === 'bubble' && lastV().action === 'show' && lastV().visible === true, JSON.stringify(lastV()));
+  check('12b the click also opens the chat (the panel), not just the strip', await until(panelOpen, 4000));
   check('12b the bubble went down BEFORE the strip appeared', lastV().effects.join() === 'place,hide-bubble,show-window,reassert,notify-renderer' && bubbleLast('hide').stripVisible === false && bubbleLast('hide').bubbleVisible === false && bubbleOnlyOne());
   check('12b the strip comes back at its own place, not the bubble\'s', JSON.stringify(lastV().pos) === stripBefore, `${JSON.stringify(lastV().pos)} vs ${stripBefore}`);
 
