@@ -246,7 +246,7 @@ function trayIcon() {
 
 function trayMenu() {
   return Menu.buildFromTemplate([
-    { label: visibility.trayLabel(vis.hidden()), click: () => applyVisibility('toggle', 'tray') },
+    { label: visibility.trayLabel(vis.hidden()), click: () => trayToggle() },
     { label: 'Open Chat', accelerator: TOGGLE_SHORTCUT, click: () => togglePanel('tray') },
     { label: 'Reset Position', click: resetPosition },
     { type: 'separator' },
@@ -265,7 +265,7 @@ function createTray() {
     tray.setToolTip('Claudebar Heroes');
     tray.setContextMenu(trayMenu());
     // macOS opens the menu on a click; elsewhere a plain click toggles.
-    if (process.platform !== 'darwin') tray.on('click', () => applyVisibility('toggle', 'tray'));
+    if (process.platform !== 'darwin') tray.on('click', () => trayToggle());
     return true;
   } catch (err) {
     console.error('Could not create the tray icon:', err);
@@ -423,7 +423,7 @@ function bubbleRelease(point) {
   bubbleMove(point);
   const result = bubbleGesture.release();
   stopBubblePoll();
-  if (result === 'click') applyVisibility('show', 'bubble');
+  if (result === 'click') showWithChat('bubble');
   else if (result === 'drag') {
     // The drop spot is kept inside a work area (never under the dock or taskbar) and remembered; only main writes it.
     const [x, y] = bubbleWin.getPosition();
@@ -443,7 +443,7 @@ function startBubblePoll() {
 // The right-click menu: fixed items, no text from the page.
 function bubbleMenuTemplate() {
   return [
-    { label: 'Show Claudebar Heroes', click: () => applyVisibility('show', 'bubble') },
+    { label: 'Show Claudebar Heroes', click: () => showWithChat('bubble') },
     { type: 'separator' },
     { label: 'Quit', role: 'quit' },
   ];
@@ -740,7 +740,7 @@ function startCommandSeam() {
     try { lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean); } catch { return; }
     for (; done < lines.length; done++) {
       const [name, ...rest] = lines[done].split(' ');
-      if (name === 'tray') applyVisibility('toggle', 'tray');
+      if (name === 'tray') trayToggle();
       else if (name === 'shortcut') togglePanel('shortcut');
       else if (name === 'notify-click') {
         let target = null;
@@ -772,6 +772,17 @@ function togglePanel(reason = 'shortcut') {
   win.focus();
   win.webContents.send('panel:toggle');
 }
+
+// The tray and the bubble are handles for a hidden app: when one of them brings the strip back, the chat opens with it
+// (the panel is always closed after a hide, so the toggle opens it). A hide, or a show that changed nothing, opens nothing.
+function openChatAfterShow(result) {
+  if (!result || !result.changed || result.hidden || !win || win.isDestroyed()) return result;
+  win.focus();
+  win.webContents.send('panel:toggle');
+  return result;
+}
+const showWithChat = (reason) => openChatAfterShow(applyVisibility('show', reason));
+const trayToggle = () => openChatAfterShow(applyVisibility('toggle', 'tray'));
 
 function registerIpc() {
   ipcMain.handle('settings:get', () => settings.get());
