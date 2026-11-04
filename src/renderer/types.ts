@@ -58,6 +58,8 @@ export interface AgentRecord {
 export interface ArchivedAgent {
   /** The agent id ("observed-<toolUseId>" for delegated ones); a repeat replaces the older entry. */
   id: string;
+  /** 'quest' = the Quest chat moved here by New session; missing means an agent. */
+  source?: 'agent' | 'quest';
   name: string;
   definition: string;
   /** The first message sent to the agent. */
@@ -65,7 +67,7 @@ export interface ArchivedAgent {
   observed: boolean;
   status: 'done' | 'error' | 'cancelled';
   /** idle = retired after the idle time; closed = its tab was closed. */
-  reason: 'idle' | 'closed';
+  reason: 'idle' | 'closed' | 'new-session';
   startedAt: number;
   endedAt: number | null;
   /** Set by the main process. */

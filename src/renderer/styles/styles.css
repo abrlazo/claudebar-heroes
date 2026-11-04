@@ -428,9 +428,11 @@ body.theme-light .archive-item { border-color: #d0d0d5; }
 .archive-badge.done { color: #4ade80; }
 .archive-badge.error { color: #ff8080; }
 .archive-badge.cancelled { color: #e0a030; }
+.archive-badge.quest { color: #60a5fa; }
 body.theme-light .archive-badge.done { color: #15803d; }
 body.theme-light .archive-badge.error { color: #d32f2f; }
 body.theme-light .archive-badge.cancelled { color: #a06800; }
+body.theme-light .archive-badge.quest { color: #1d4ed8; }
 
 /* ---------- Minions ---------- */
 

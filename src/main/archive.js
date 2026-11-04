@@ -17,7 +17,8 @@ const TIME_CAP = 8.64e15; // the largest time a JS Date can hold; real timestamp
 const LOST_TIME = NUMBER_CAP;
 
 const STATUSES = ['done', 'error', 'cancelled'];
-const REASONS = ['idle', 'closed'];
+const REASONS = ['idle', 'closed', 'new-session'];
+const SOURCES = ['agent', 'quest'];
 const TEXT_KINDS = ['user', 'assistant', 'error', 'meta', 'thinking'];
 const ID_PATTERN = /^[\w:.-]{1,100}$/;
 
@@ -79,6 +80,9 @@ function cleanArchived(raw) {
   if (!isObject(raw)) return null;
   if (typeof raw.id !== 'string' || !ID_PATTERN.test(raw.id)) return null;
   if (!STATUSES.includes(raw.status) || !REASONS.includes(raw.reason)) return null;
+  // A Quest record only comes from New session (main builds it); the two always go together.
+  if (raw.reason === 'new-session' && raw.source !== 'quest') return null;
+  const source = raw.source === 'quest' && raw.reason === 'new-session' ? 'quest' : 'agent';
   const input = Array.isArray(raw.messages) ? raw.messages : [];
   // Cheap cut first: the task plus the newest ones.
   const window = input.length > MAX_INPUT_MESSAGES ? [input[0], ...input.slice(-(MAX_INPUT_MESSAGES - 1))] : input;
@@ -86,6 +90,7 @@ function cleanArchived(raw) {
   const usage = isObject(raw.usage) ? raw.usage : {};
   return {
     id: raw.id,
+    source,
     name: str(raw.name, 40),
     definition: str(raw.definition, 60),
     task: str(raw.task, 500),
@@ -114,6 +119,37 @@ function cleanArchive(list) {
   return [...byId.values()].slice(-MAX_ARCHIVED);
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const pad2 = (n) => String(n).padStart(2, '0');
+
+// The Quest chat of a workspace as an archive record (cleanArchived still has the last word), or null when it
+// has no user or assistant message worth keeping. workspace.usage is a lifetime total, so usage stays zero;
+// chat messages have no timestamps, so startedAt is unknown (0).
+function buildQuestRecord(ws, now = Date.now()) {
+  const messages = ws && Array.isArray(ws.messages) ? ws.messages : [];
+  const firstUser = messages.find((m) => isObject(m) && m.kind === 'user');
+  if (!messages.some((m) => isObject(m) && (m.kind === 'user' || m.kind === 'assistant'))) return null;
+  const d = new Date(now);
+  const text = firstUser && typeof firstUser.text === 'string' ? firstUser.text.trim() : '';
+  const rand = Math.random().toString(36).slice(2, 6).padEnd(4, '0');
+  return {
+    id: `quest-${now}-${rand}`,
+    source: 'quest',
+    name: `Quest ${MONTHS[d.getMonth()]} ${d.getDate()}, ${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
+    definition: '',
+    task: text ? text.slice(0, 500) : firstUser ? '(images)' : '',
+    observed: false,
+    status: 'done',
+    reason: 'new-session',
+    startedAt: 0,
+    endedAt: now,
+    archivedAt: now,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
+    sessionId: typeof ws.sessionId === 'string' ? ws.sessionId : null,
+    messages,
+  };
+}
+
 module.exports = {
-  MAX_ARCHIVED, MAX_ARCHIVE_MESSAGES, MAX_MESSAGE_CHARS, MAX_CHAT_CHARS, cleanArchived, cleanArchive,
+  buildQuestRecord, MAX_ARCHIVED, MAX_ARCHIVE_MESSAGES, MAX_MESSAGE_CHARS, MAX_CHAT_CHARS, cleanArchived, cleanArchive,
 };

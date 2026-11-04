@@ -4,7 +4,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { app } = require('electron');
 const { designFor, rememberDesign } = require('./hero-design');
-const { MAX_ARCHIVED, cleanArchived, cleanArchive } = require('./archive');
+const { MAX_ARCHIVED, cleanArchived, cleanArchive, buildQuestRecord } = require('./archive');
 const { nextDelay } = require('./write-schedule');
 const { syncAchievements } = require('./achievement-sync');
 const { coerceFlag } = require('./notify');
@@ -387,6 +387,18 @@ function archiveAgent(wsId, raw) {
   return archive;
 }
 
+// New session: the current Quest chat becomes an archive record and the chat is cleared in the SAME update,
+// so the file never holds a cleared chat without its archive entry. Nothing worth keeping: it only clears.
+function archiveQuest(wsId) {
+  const ws = get().workspaces.find((w) => w.id === wsId);
+  if (!ws) return get();
+  const clear = { sessionId: null, messages: [], lastContext: 0 };
+  const record = cleanArchived(buildQuestRecord(ws, Date.now()));
+  if (!record) return updateWorkspace(wsId, clear);
+  const archive = [...cleanArchive(ws.archive), record].slice(-MAX_ARCHIVED);
+  return updateWorkspace(wsId, { ...clear, archive });
+}
+
 function deleteArchived(wsId, id) {
   const ws = get().workspaces.find((w) => w.id === wsId);
   if (!ws) return null;
@@ -402,7 +414,7 @@ function clearArchive(wsId) {
 }
 
 module.exports = {
-  archiveAgent, deleteArchived, clearArchive,
+  archiveAgent, archiveQuest, deleteArchived, clearArchive,
   get, set, active, updateWorkspace, addTrophy, addAchievement, addStats, markMigration, clearAchievementSyncNotice, addUsage, importWorkspace, selectWorkspace, removeWorkspace, rerollHero, applyDesign,
   newAgent, updateAgent, addAgent, removeAgent, addMessage, flushSync, onWriteError,
 };
