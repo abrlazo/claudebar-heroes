@@ -380,6 +380,13 @@ function AppShell() {
         onClose={() => { void panel.toggleDrawer(false); }}
         onDelete={(id) => { if (ws) void deleteArchived(ws.id, id); }}
         onClear={() => { if (ws) void clearArchive(ws.id); }}
+        canRestore={!busy}
+        onRestore={async (id) => {
+          if (await workspaceActions.restoreQuest(id)) {
+            agents.select(null); // the Quest tab
+            void panel.toggleDrawer(false);
+          }
+        }}
       />
       <Strip
         onTogglePanel={() => panel.toggle()}

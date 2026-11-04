@@ -17,6 +17,9 @@ interface ArchiveDrawerProps {
   onClose: () => void;
   onDelete: (id: string) => void;
   onClear: () => void;
+  /** Makes a Quest chat the main chat (the current one goes to the archive). */
+  onRestore: (id: string) => void;
+  canRestore: boolean;
 }
 
 const totalTokens = (a: ArchivedAgent) => a.usage.input + a.usage.output + a.usage.cacheRead + a.usage.cacheCreate;
@@ -31,7 +34,7 @@ function duration(a: ArchivedAgent): string {
 const REASONS = { idle: 'retired after being idle', closed: 'tab closed', 'new-session': 'new session' } as const;
 const EMPTY = 'No archived chats yet. Finished agents land here after 2 minutes idle or when you close their tab, and so does the chat you replace with New session.';
 
-export function ArchiveDrawer({ open, wsId, archive, onClose, onDelete, onClear }: ArchiveDrawerProps) {
+export function ArchiveDrawer({ open, wsId, archive, onClose, onDelete, onClear, onRestore, canRestore }: ArchiveDrawerProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -107,6 +110,10 @@ export function ArchiveDrawer({ open, wsId, archive, onClose, onDelete, onClear 
                 : <span className={`archive-badge ${selected.status}`}>{selected.status}</span>)}
               {selected?.observed && <span className="archive-badge observed">delegated</span>}
               <span className="archive-readonly">read-only</span>
+              {selected?.source === 'quest' && (
+                <button type="button" className="archive-restore" disabled={!canRestore} onClick={() => onRestore(selected.id)}
+                  title={canRestore ? 'Make this the Quest chat; the current Quest chat goes to the archive' : 'Not while Claude is working'}>Restore</button>
+              )}
               {selected && (
                 <button type="button" className="archive-delete" title="Delete this chat" onClick={() => onDelete(selected.id)}>Delete</button>
               )}

@@ -58,6 +58,7 @@ contextBridge.exposeInMainWorld('bar', {
   answerPermission: (target, agentId, requestId, decision, message) => ipcRenderer.invoke('permission:answer', message === undefined ? { target, agentId, requestId, decision } : { target, agentId, requestId, decision, message }),
   archiveAgent: (wsId, record) => ipcRenderer.invoke('agents:archive', wsId, record),
   deleteArchived: (wsId, id) => ipcRenderer.invoke('archive:delete', wsId, id),
+  restoreQuest: (wsId, id) => ipcRenderer.invoke('archive:restore', wsId, id),
   clearArchive: (wsId) => ipcRenderer.invoke('archive:clear', wsId),
   listAgents: (wsId) => ipcRenderer.invoke('agents:list', wsId),
 
