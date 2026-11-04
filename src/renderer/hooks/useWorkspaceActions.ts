@@ -14,6 +14,8 @@ export interface WorkspaceActions {
   removeProject: (ws: Workspace) => Promise<void>;
   rerollHero: (ws: Workspace) => Promise<void>;
   newSession: () => Promise<void>;
+  /** Makes an archived Quest chat the Quest chat (the current one goes to the archive). True when it worked. */
+  restoreQuest: (id: string) => Promise<boolean>;
   /** Swaps the project's hero for a summoned character, e.g. when the user types "summon yoda". */
   summonHero: (ws: Workspace, summon: SummonRequest, userText: string) => Promise<void>;
 }
@@ -83,6 +85,26 @@ export function useWorkspaceActions({ busy, say }: { busy: boolean; say: (text: 
     persistMessage(ws.id, { kind: 'meta', text: archived ? 'New session started. The previous chat is in the Archive.' : 'New session started' });
   }, [busy, getSettings, persistMessage, replace]);
 
+  const restoreQuest = useCallback(async (id: string) => {
+    const ws = getSettings().workspaces.find((w) => w.id === getSettings().activeId);
+    if (busy || !ws) {
+      say('Not while Claude is working here!', 2500);
+      return false;
+    }
+    const r = await bar.restoreQuest(ws.id, id);
+    if (!r.ok) {
+      persistMessage(ws.id, { kind: 'meta', text: r.reason === 'busy' ? 'Wait for Claude to finish before restoring a chat.' : 'That chat can no longer be restored.' });
+      return false;
+    }
+    replace(r.settings);
+    // The restored record leaves the archive; the current chat (if it had anything) becomes the newest one.
+    const before = new Set(ws.archive.map((a) => a.id));
+    const swappedOut = (r.settings.workspaces.find((w) => w.id === ws.id)?.archive ?? []).some((a) => !before.has(a.id));
+    const first = r.hadSession ? 'Restored the archived chat.' : 'Restored the archived chat (it has no saved Claude session, so Claude starts fresh with it on screen).';
+    persistMessage(ws.id, { kind: 'meta', text: swappedOut ? `${first} The previous chat is in the Archive.` : first });
+    return true;
+  }, [busy, getSettings, persistMessage, replace, say]);
+
   const summonHero = useCallback(async (ws: Workspace, summon: SummonRequest, userText: string) => {
     persistMessage(ws.id, { kind: 'user', text: userText });
     if (busy) {
@@ -129,5 +151,5 @@ export function useWorkspaceActions({ busy, say }: { busy: boolean; say: (text: 
     persistMessage(ws.id, { kind: 'meta', text: `Could not design a look for ${summon.name} (${failure}); using a generated hero.` });
   }, [busy, persistMessage, replace, say]);
 
-  return { importProject, selectProject, removeProject, rerollHero, newSession, summonHero };
+  return { importProject, selectProject, removeProject, rerollHero, newSession, restoreQuest, summonHero };
 }

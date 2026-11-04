@@ -406,7 +406,10 @@ body.theme-light .archive-item.selected { border-color: var(--purple); backgroun
 
 .archive-head { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .archive-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.archive-head button, .archive-delete { font-size: 11px; padding: 2px 8px; cursor: pointer; }
+.archive-head button, .archive-delete, .archive-restore { font-size: 11px; padding: 2px 8px; cursor: pointer; }
+.archive-restore:not(:disabled) { border-color: var(--purple); color: var(--purple); }
+body.theme-light .archive-restore:not(:disabled) { border-color: #5b3fb0; color: #5b3fb0; }
+.archive-restore:disabled { opacity: .5; cursor: default; }
 .archive-clear.confirm { border-color: #e0a030; color: #e0a030; }
 body.theme-light .archive-clear.confirm { border-color: #a06800; color: #a06800; }
 .archive-readonly { font-size: 10px; color: var(--muted); }

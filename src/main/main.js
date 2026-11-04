@@ -1277,6 +1277,16 @@ function registerIpc() {
     const archive = settings.deleteArchived(ws.id, id);
     return archive ? { archive } : null;
   });
+  // Restore an archived Quest chat as the main chat; the current one takes its place in the archive.
+  ipcMain.handle('archive:restore', (_e, wsId, id) => {
+    const ws = knownWorkspace(wsId);
+    if (!ws || typeof id !== 'string' || id.length > 100 || ws.id !== settings.active()?.id) return { ok: false, reason: 'unknown' };
+    if (mainHandle?.running) return { ok: false, reason: 'busy' };
+    const rec = (ws.archive || []).find((r) => r && r.id === id && r.source === 'quest');
+    const next = rec ? settings.restoreQuest(ws.id, id) : null;
+    if (!next) return { ok: false, reason: 'not-restorable' };
+    return { ok: true, settings: next, hadSession: typeof rec.sessionId === 'string' && rec.sessionId !== '' };
+  });
   ipcMain.handle('archive:clear', (_e, wsId) => {
     const ws = knownWorkspace(wsId);
     if (!ws) return null;

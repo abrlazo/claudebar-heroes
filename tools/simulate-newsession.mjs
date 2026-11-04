@@ -191,6 +191,71 @@ try {
   check('5 a forged source quest is stored as an agent record', forged && forged.id === 'forged-1' && forged.source === 'agent', JSON.stringify(forged));
   const forged2 = await evAsync(`window.bar.archiveAgent("img-ws",{id:"forged-2",source:"quest",name:"x",status:"done",reason:"new-session",messages:[{kind:"user",text:"f"}]}).then(r=>JSON.stringify(r))`);
   check('5 a forged new-session record is refused', forged2 === 'null', forged2);
+  // ----- 7. restore an archived Quest chat (swap) -----
+  const snap = () => { const w = readSettings().workspaces[0]; return { kills: w.kills, map: w.map, seed: w.heroSeed, usage: JSON.stringify(w.usage) }; };
+  const before7 = snap();
+  await waitSettings((w) => w.archive.length === 3 && w.messages.length >= 2);
+  const quest7 = readSettings().workspaces[0].archive.find((r) => r.source === 'quest');
+  const current7 = readSettings().workspaces[0].messages.find((m) => m.kind === 'user')?.text;
+  await click('.archive-pill');
+  await sleep(600);
+  await ev('[...document.querySelectorAll("#archive-drawer .archive-item")].find((i) => i.querySelector(".archive-badge.quest")).click()');
+  await sleep(300);
+  check('7 the Restore button shows for a quest chat, not for an agent chat', (await ev('!!document.querySelector("#archive-drawer .archive-restore:not(:disabled)")')) === true);
+  await shot('restore-dark');
+  await ev('document.body.classList.remove("theme-dark");document.body.classList.add("theme-light")');
+  await sleep(300);
+  await shot('restore-light');
+  await ev('document.body.classList.remove("theme-light");document.body.classList.add("theme-dark")');
+  await ev('[...document.querySelectorAll("#archive-drawer .archive-item")].find((i) => !i.querySelector(".archive-badge.quest")).click()');
+  await sleep(300);
+  check('7 an agent chat has no Restore button', (await ev('!!document.querySelector("#archive-drawer .archive-restore")')) === false);
+  await ev('[...document.querySelectorAll("#archive-drawer .archive-item")].find((i) => i.querySelector(".archive-badge.quest")).click()');
+  await sleep(300);
+  await click('#archive-drawer .archive-restore');
+  check('7 the old chat is on screen and the drawer is closed', await until(async () => (await logText()).includes('hello') && !(await ev('!!document.querySelector("#archive-drawer .archive-item")'))), await logText());
+  check('7 settings.json: old messages and session back, archive count unchanged, current chat is the newest quest record', await waitSettings((w) => w.sessionId === quest7.sessionId && w.messages.some((m) => m.text === 'hello') && w.archive.length === 3 && w.archive.at(-1).source === 'quest' && w.archive.at(-1).messages.some((m) => m.text === current7) && !w.archive.some((r) => r.id === quest7.id)));
+  const after7 = snap();
+  check('7 hero, kills, map and usage are untouched', JSON.stringify(before7) === JSON.stringify(after7));
+  const argsBefore = readLines(argsFile).length;
+  await type('and again');
+  await sleep(150);
+  await click('#tab-project-chat .send');
+  check('7 the next send resumes the restored session', await until(() => readLines(argsFile).slice(argsBefore).join('\n').includes(`--resume\n${quest7.sessionId}`) || readLines(argsFile).slice(argsBefore).join(' ').includes(`--resume ${quest7.sessionId}`), 20000), readLines(argsFile).slice(argsBefore).join(' ').slice(0, 200));
+  await idle(20000);
+
+  // forged calls
+  const restoreCall = (wsId, id) => evAsync(`window.bar.restoreQuest(${JSON.stringify(wsId)}, ${JSON.stringify(id)}).then((r) => JSON.stringify({ ok: r.ok, reason: r.reason }))`);
+  const stable = JSON.stringify(readSettings().workspaces[0].archive.map((r) => r.id));
+  const forgedCalls = [await restoreCall('img-ws', 'nope'), await restoreCall('img-ws', 'agent-old'), await restoreCall('other-ws', quest7.id), await restoreCall('img-ws', 42), await restoreCall('img-ws', 'x'.repeat(200))];
+  check('7 forged restores (unknown, agent record, other workspace, non-string, too long) all fail', forgedCalls.every((r) => JSON.parse(r).ok === false), forgedCalls.join(' '));
+  check('7 agent record and unknown id answer not-restorable', JSON.parse(forgedCalls[0]).reason === 'not-restorable' && JSON.parse(forgedCalls[1]).reason === 'not-restorable');
+  check('7 forged restores change nothing (the pill and the chat are as before)', (await pillText()) === `Archive (${JSON.parse(stable).length})` && (await logText()).includes('and again'), await pillText());
+
+  // empty current chat: restoring only removes the record
+  await click('#new-session');
+  await sleep(800);
+  const countMid = await evAsync('window.bar.newSession().then(s=>s.workspaces[0].archive.length)');
+  const target = readSettings().workspaces[0].archive.find((r) => r.source === 'quest');
+  const emptyRes = JSON.parse(await evAsync(`window.bar.restoreQuest("img-ws", ${JSON.stringify(target.id)}).then((r)=>JSON.stringify({ok:r.ok, n:r.settings?.workspaces[0].archive.length}))`));
+  check('7 restoring into an empty chat drops the archive by one', emptyRes.ok === true && emptyRes.n === countMid - 1, JSON.stringify({ ...emptyRes, countMid }));
+
+  // refused while busy
+  await type('SLOW busy two');
+  await sleep(150);
+  await click('#tab-project-chat .send');
+  await until(async () => await awake());
+  const nBusy = readSettings().workspaces[0].archive.length;
+  const quest8 = (await evAsync('window.bar.newSession().then(s=>JSON.stringify(s.workspaces[0].archive.filter((r)=>r.source==="quest").map((r)=>r.id)))'));
+  const busyRes = JSON.parse(await restoreCall('img-ws', JSON.parse(quest8)[0]));
+  check('7 restore while a run is live answers busy', busyRes.ok === false && busyRes.reason === 'busy', JSON.stringify(busyRes));
+  await click('.archive-pill');
+  await sleep(500);
+  check('7 the Restore button is disabled while busy', (await ev('document.querySelector("#archive-drawer .archive-restore")?.disabled')) === true || (await ev('!document.querySelector("#archive-drawer .archive-restore")')) === true);
+  await click('#archive-close');
+  await idle(20000);
+  check('7 busy refusal changed nothing', readSettings().workspaces[0].archive.length === nBusy);
+
   check('6 no page errors', pageErrors.length === 0, pageErrors.join(' | '));
 } catch (err) {
   console.log(`FAIL  simulation error: ${err.message}`);

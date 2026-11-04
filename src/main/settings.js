@@ -4,7 +4,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { app } = require('electron');
 const { designFor, rememberDesign } = require('./hero-design');
-const { MAX_ARCHIVED, cleanArchived, cleanArchive, buildQuestRecord } = require('./archive');
+const { MAX_ARCHIVED, cleanArchived, cleanArchive, buildQuestRecord, swapQuest } = require('./archive');
 const { nextDelay } = require('./write-schedule');
 const { syncAchievements } = require('./achievement-sync');
 const { coerceFlag } = require('./notify');
@@ -399,6 +399,18 @@ function archiveQuest(wsId) {
   return updateWorkspace(wsId, { ...clear, archive });
 }
 
+// Restore: swaps an archived Quest chat with the current one in ONE update (see archive.swapQuest).
+// Null when the id is not a Quest record of this workspace.
+function restoreQuest(wsId, id) {
+  const ws = get().workspaces.find((w) => w.id === wsId);
+  if (!ws) return null;
+  const patch = swapQuest(ws, id);
+  if (!patch) return null;
+  patch.messages = trimOldThumbs(patch.messages.map(cleanMessageImages));
+  updateWorkspace(wsId, patch);
+  return get();
+}
+
 function deleteArchived(wsId, id) {
   const ws = get().workspaces.find((w) => w.id === wsId);
   if (!ws) return null;
@@ -414,7 +426,7 @@ function clearArchive(wsId) {
 }
 
 module.exports = {
-  archiveAgent, archiveQuest, deleteArchived, clearArchive,
+  archiveAgent, archiveQuest, restoreQuest, deleteArchived, clearArchive,
   get, set, active, updateWorkspace, addTrophy, addAchievement, addStats, markMigration, clearAchievementSyncNotice, addUsage, importWorkspace, selectWorkspace, removeWorkspace, rerollHero, applyDesign,
   newAgent, updateAgent, addAgent, removeAgent, addMessage, flushSync, onWriteError,
 };

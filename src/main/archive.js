@@ -88,7 +88,7 @@ function cleanArchived(raw) {
   const window = input.length > MAX_INPUT_MESSAGES ? [input[0], ...input.slice(-(MAX_INPUT_MESSAGES - 1))] : input;
   const messages = window.map(cleanMessage).filter(Boolean);
   const usage = isObject(raw.usage) ? raw.usage : {};
-  return {
+  const rec = {
     id: raw.id,
     source,
     name: str(raw.name, 40),
@@ -104,6 +104,9 @@ function cleanArchived(raw) {
     sessionId: typeof raw.sessionId === 'string' && raw.sessionId ? raw.sessionId.slice(0, 100) : null,
     messages: capMessages(messages, input.length - window.length),
   };
+  // Only a Quest chat can be restored, so only it remembers how full its context was.
+  if (source === 'quest') rec.lastContext = num(raw.lastContext);
+  return rec;
 }
 
 // A whole stored list: unusable entries dropped, repeated ids keep the newest, at most MAX_ARCHIVED (newest last).
@@ -146,10 +149,30 @@ function buildQuestRecord(ws, now = Date.now()) {
     archivedAt: now,
     usage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
     sessionId: typeof ws.sessionId === 'string' ? ws.sessionId : null,
+    lastContext: Number.isFinite(ws.lastContext) ? ws.lastContext : 0,
     messages,
   };
 }
 
+// Restore: an archived Quest chat becomes the workspace's chat and the current chat takes its place in the
+// archive. Returns the workspace patch { sessionId, messages, lastContext, archive } or null (unknown id, an
+// agent record). The record is looked up in main's own copy; the restored one leaves first, so the list never grows.
+function swapQuest(ws, id, now = Date.now()) {
+  if (!ws || typeof id !== 'string') return null;
+  const archive = cleanArchive(ws.archive);
+  const rec = archive.find((r) => r.id === id && r.source === 'quest');
+  if (!rec) return null;
+  const current = cleanArchived(buildQuestRecord(ws, now));
+  const next = archive.filter((r) => r.id !== id);
+  if (current) next.push(current);
+  return {
+    sessionId: rec.sessionId,
+    messages: rec.messages.map((m) => ({ ...m })),
+    lastContext: rec.lastContext || 0,
+    archive: next.slice(-MAX_ARCHIVED),
+  };
+}
+
 module.exports = {
-  buildQuestRecord, MAX_ARCHIVED, MAX_ARCHIVE_MESSAGES, MAX_MESSAGE_CHARS, MAX_CHAT_CHARS, cleanArchived, cleanArchive,
+  buildQuestRecord, swapQuest, MAX_ARCHIVED, MAX_ARCHIVE_MESSAGES, MAX_MESSAGE_CHARS, MAX_CHAT_CHARS, cleanArchived, cleanArchive,
 };

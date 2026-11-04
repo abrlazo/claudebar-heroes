@@ -73,8 +73,10 @@ export interface ArchivedAgent {
   /** Set by the main process. */
   archivedAt: number;
   usage: Usage;
-  /** Kept for a future "resume"; nothing uses it yet. */
+  /** Quest records are restored with it (--resume); agent records keep it unused. */
   sessionId: string | null;
+  /** Quest records only: tokens in context when the chat was archived (the vigor gauge after a restore). */
+  lastContext?: number;
   messages: ChatMessage[];
 }
 
@@ -342,6 +344,7 @@ export interface Bar {
   archiveAgent(wsId: string, record: Omit<ArchivedAgent, 'archivedAt'>): Promise<{ archive: ArchivedAgent[] } | null>;
   deleteArchived(wsId: string, id: string): Promise<{ archive: ArchivedAgent[] } | null>;
   clearArchive(wsId: string): Promise<{ archive: ArchivedAgent[] } | null>;
+  restoreQuest(wsId: string, id: string): Promise<{ ok: true; settings: Settings; hadSession: boolean } | { ok: false; reason: 'unknown' | 'busy' | 'not-restorable' }>;
 
   onClaudeEvent(cb: (event: ClaudeEvent) => void): Unsubscribe;
   onAgentEvent(cb: (event: AgentEvent) => void): Unsubscribe;

@@ -170,4 +170,28 @@ check('quest: hostile __proto__ keys do not leak', (() => {
 })());
 
 
+// ----- restoring a Quest chat (swapQuest) -----
+const { swapQuest } = archive;
+const qrec = (id, text, over = {}) => cleanArchived({ ...buildQuestRecord({ sessionId: `s-${id}`, lastContext: 4000, messages: [{ kind: 'user', text }, { kind: 'assistant', text: `re ${text}` }] }, 1700000000000), id, ...over });
+const wsOf = (archiveList, over = {}) => ({ sessionId: 'cur', lastContext: 900, messages: [{ kind: 'user', text: 'now' }, { kind: 'assistant', text: 'answer' }], archive: archiveList, ...over });
+const A = qrec('quest-1-aaaa', 'old chat');
+const G = base({ id: 'agent-x' });
+check('swap: lastContext is kept on a quest record and 0 on bad values', A.lastContext === 4000 && cleanArchived(quest({ lastContext: -5 })).lastContext === 0 && cleanArchived(quest({ lastContext: NaN })).lastContext === 0 && cleanArchived(quest()).lastContext === 0);
+check('swap: agent records keep their old shape (no lastContext)', !('lastContext' in cleanArchived(base({ lastContext: 5 }))));
+check('swap: buildQuestRecord carries lastContext', buildQuestRecord({ lastContext: 7, messages: [{ kind: 'user', text: 'a' }] }).lastContext === 7 && buildQuestRecord({ messages: [{ kind: 'user', text: 'a' }] }).lastContext === 0);
+const sw = swapQuest(wsOf([G, A]), 'quest-1-aaaa', 1800000000000);
+check('swap: the old chat, session and context come in', sw && sw.sessionId === 's-quest-1-aaaa' && sw.lastContext === 4000 && sw.messages[0].text === 'old chat' && sw.messages.length === 2);
+check('swap: the current chat is the newest record, the restored id is gone, length unchanged', sw.archive.length === 2 && sw.archive.at(-1).source === 'quest' && sw.archive.at(-1).sessionId === 'cur' && sw.archive.at(-1).lastContext === 900 && sw.archive.at(-1).messages[0].text === 'now' && !sw.archive.some((r) => r.id === 'quest-1-aaaa') && sw.archive[0].id === 'agent-x');
+check('swap: an empty current chat only restores (length minus one)', swapQuest(wsOf([G, A], { messages: [] }), 'quest-1-aaaa').archive.length === 1);
+check('swap: a meta-only current chat is the same', swapQuest(wsOf([G, A], { messages: [{ kind: 'meta', text: 'm' }] }), 'quest-1-aaaa').archive.length === 1);
+check('swap: an agent record, an unknown id and a non-string id give null', swapQuest(wsOf([G, A]), 'agent-x') === null && swapQuest(wsOf([G, A]), 'nope') === null && swapQuest(wsOf([G, A]), 42) === null && swapQuest(wsOf([G, A]), undefined) === null && swapQuest(null, 'a') === null);
+const full = [A, ...Array.from({ length: MAX_ARCHIVED - 1 }, (_, i) => base({ id: `a${i}` }))];
+const fullSwap = swapQuest(wsOf(full), 'quest-1-aaaa');
+check('swap: a full list stays full and nothing older is evicted', fullSwap.archive.length === MAX_ARCHIVED && fullSwap.archive[0].id === 'a0');
+check('swap: the restored messages are a copy', (() => { const s = swapQuest(wsOf([A]), 'quest-1-aaaa'); s.messages[0].text = 'changed'; return A.messages[0].text === 'old chat'; })());
+check('swap: a hostile __proto__ record does not leak', (() => {
+  const s = swapQuest(wsOf(JSON.parse('[{"id":"quest-9-zzzz","source":"quest","reason":"new-session","status":"done","__proto__":{"p":1},"messages":[{"kind":"user","text":"h"}]}]')), 'quest-9-zzzz');
+  return s && ({}).p === undefined && s.messages[0].text === 'h';
+})());
+
 process.exit(failed ? 1 : 0);
