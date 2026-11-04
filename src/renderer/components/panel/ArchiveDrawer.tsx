@@ -28,8 +28,8 @@ function duration(a: ArchivedAgent): string {
   const s = Math.round((a.endedAt - a.startedAt) / 1000);
   return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
 }
-const REASONS = { idle: 'retired after being idle', closed: 'tab closed' } as const;
-const EMPTY = 'No archived chats yet. Finished agents land here after 2 minutes idle or when you close their tab.';
+const REASONS = { idle: 'retired after being idle', closed: 'tab closed', 'new-session': 'new session' } as const;
+const EMPTY = 'No archived chats yet. Finished agents land here after 2 minutes idle or when you close their tab, and so does the chat you replace with New session.';
 
 export function ArchiveDrawer({ open, wsId, archive, onClose, onDelete, onClear }: ArchiveDrawerProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -88,7 +88,7 @@ export function ArchiveDrawer({ open, wsId, archive, onClose, onDelete, onClear 
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedId(a.id); } }}>
                     <div className="archive-row">
                       <span className="archive-name">{a.name}</span>
-                      <span className={`archive-badge ${a.status}`}>{a.status}</span>
+                      {a.source === 'quest' ? <span className="archive-badge quest">quest</span> : <span className={`archive-badge ${a.status}`}>{a.status}</span>}
                       <button type="button" className="archive-delete" title="Delete this chat" aria-label={`Delete ${a.name}`}
                         onClick={(e) => { e.stopPropagation(); onDelete(a.id); }}>✕</button>
                     </div>
@@ -102,7 +102,9 @@ export function ArchiveDrawer({ open, wsId, archive, onClose, onDelete, onClear 
           <div className="archive-chat">
             <div className="archive-head">
               <strong className="archive-title">{selected ? selected.name : 'No chat selected'}</strong>
-              {selected && <span className={`archive-badge ${selected.status}`}>{selected.status}</span>}
+              {selected && (selected.source === 'quest'
+                ? <span className="archive-badge quest">quest</span>
+                : <span className={`archive-badge ${selected.status}`}>{selected.status}</span>)}
               {selected?.observed && <span className="archive-badge observed">delegated</span>}
               <span className="archive-readonly">read-only</span>
               {selected && (

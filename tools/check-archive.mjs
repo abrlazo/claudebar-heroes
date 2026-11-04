@@ -144,4 +144,30 @@ check('idle: nextDeadline is the earliest of the eligible finished agents', idle
 check('idle: nothing waiting means no timer', idle.nextDeadline([ag('c', 'running', 0)], L, null) === null && idle.nextDeadline([], L, null) === null);
 check('idle: only the overdue agents are due', idle.dueAgents([ag('a', 'done', 0), ag('b', 'done', 100000)], L + 1, L, null).map((a) => a.id).join() === 'a');
 
+// ----- Quest records (New session) -----
+const { buildQuestRecord } = archive;
+const quest = (over = {}) => base({ id: 'quest-1-abcd', source: 'quest', reason: 'new-session', ...over });
+check('quest: source quest + reason new-session passes', cleanArchived(quest())?.source === 'quest');
+check('quest: quest with another reason is an agent record', cleanArchived(quest({ reason: 'idle' }))?.source === 'agent');
+check('quest: new-session without source quest is refused', cleanArchived(base({ reason: 'new-session' })) === null && cleanArchived(base({ reason: 'new-session', source: 'agent' })) === null);
+check('quest: unknown source falls back to agent; old records get agent', cleanArchived(base({ source: 'evil' })).source === 'agent' && cleanArchived(base()).source === 'agent');
+check('quest: only meta lines or an empty list build nothing', buildQuestRecord({ messages: [{ kind: 'meta', text: 'x' }] }) === null && buildQuestRecord({ messages: [] }) === null && buildQuestRecord({}) === null);
+const built = buildQuestRecord({ sessionId: 's1', messages: [{ kind: 'user', text: 'hi', images: [{ thumb: 'data:image/jpeg;base64,AAAA' }] }, { kind: 'art', x: 1 }, { kind: 'assistant', text: 'yo' }] }, 1700000000000);
+const cleaned = cleanArchived(built);
+check('quest: one user message builds a valid record (id pattern, zero usage, startedAt 0)', cleaned && cleaned.source === 'quest' && /^quest-1700000000000-\w{4}$/.test(cleaned.id) && cleaned.usage.input === 0 && cleaned.startedAt === 0 && cleaned.sessionId === 's1' && cleaned.task === 'hi');
+check('quest: thumbnails become imageCount, art is dropped', cleaned.messages.length === 2 && cleaned.messages[0].imageCount === 1 && !('images' in cleaned.messages[0]));
+check('quest: an images-only first message gives task (images)', buildQuestRecord({ messages: [{ kind: 'user', text: '', images: [{ thumb: 'x' }] }] }).task === '(images)');
+const long = Array.from({ length: 250 }, (_, i) => ({ kind: i % 2 ? 'assistant' : 'user', text: `m${i}` }));
+const capped = cleanArchived(buildQuestRecord({ messages: long }));
+check('quest: 250 messages are capped to 200 keeping the first and an omitted line', capped.messages.length === 200 && capped.messages[0].text === 'm0' && /omitted/.test(capped.messages[1].text));
+const many = Array.from({ length: MAX_ARCHIVED }, (_, i) => base({ id: `a${i}` }));
+const withQuest = cleanArchive([...many, quest()]);
+check('quest: a 21st record drops the oldest', withQuest.length === MAX_ARCHIVED && withQuest[0].id === 'a1' && withQuest.at(-1).source === 'quest');
+check('quest: two records in the same millisecond differ', new Set(Array.from({ length: 50 }, () => buildQuestRecord({ messages: [{ kind: 'user', text: 'a' }] }, 5).id)).size > 1);
+check('quest: hostile __proto__ keys do not leak', (() => {
+  const r = cleanArchived(buildQuestRecord(JSON.parse('{"messages":[{"kind":"user","text":"a","__proto__":{"p":1}}],"__proto__":{"q":1}}')));
+  return r && ({}).p === undefined && ({}).q === undefined && r.p === undefined;
+})());
+
+
 process.exit(failed ? 1 : 0);

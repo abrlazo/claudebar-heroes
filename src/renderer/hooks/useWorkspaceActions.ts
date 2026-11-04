@@ -74,9 +74,13 @@ export function useWorkspaceActions({ busy, say }: { busy: boolean; say: (text: 
     if (busy || !ws) return;
     // Main clears both the session and the saved messages, otherwise the old
     // chat comes back on the next workspace switch or restart.
+    const newestBefore = ws.archive.at(-1)?.id;
     const next = await bar.newSession();
     replace(next);
-    persistMessage(ws.id, { kind: 'meta', text: 'New session started' });
+    // Main moves the old chat to the archive; the newest record changes even when the oldest one fell off the cap.
+    const newestAfter = next.workspaces.find((w) => w.id === ws.id)?.archive.at(-1)?.id;
+    const archived = newestAfter !== undefined && newestAfter !== newestBefore;
+    persistMessage(ws.id, { kind: 'meta', text: archived ? 'New session started. The previous chat is in the Archive.' : 'New session started' });
   }, [busy, getSettings, persistMessage, replace]);
 
   const summonHero = useCallback(async (ws: Workspace, summon: SummonRequest, userText: string) => {

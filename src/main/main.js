@@ -1123,8 +1123,10 @@ function registerIpc() {
 
   ipcMain.handle('claude:newSession', () => {
     const ws = settings.active();
-    // Clear the saved chat too, or it reappears on the next reload.
-    return ws ? settings.updateWorkspace(ws.id, { sessionId: null, messages: [], lastContext: 0 }) : settings.get();
+    // Not while the run is going (the renderer checks too).
+    if (mainHandle?.running) return settings.get();
+    // The old chat moves to the archive and is cleared in one update, or it reappears on the next reload.
+    return ws ? settings.archiveQuest(ws.id) : settings.get();
   });
 
   ipcMain.handle('claude:info', () => ({ bin: claude.resolveClaudeBinary() }));
@@ -1264,7 +1266,9 @@ function registerIpc() {
     if (agents.isRunning(record.id)) return null;
     // An agent that is live in another project cannot be archived into this one.
     if (settings.get().workspaces.some((w) => w.id !== ws.id && (w.agents || []).some((a) => a.id === record.id))) return null;
-    const archive = settings.archiveAgent(ws.id, record);
+    // Only main can make a Quest record (New session), never the renderer.
+    const { source, ...clean } = record;
+    const archive = settings.archiveAgent(ws.id, clean);
     return archive ? { archive } : null;
   });
   ipcMain.handle('archive:delete', (_e, wsId, id) => {
